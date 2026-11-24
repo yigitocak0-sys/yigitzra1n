@@ -7,6 +7,10 @@ VENV_DIR="$ROOT_DIR/.venv"
 check_macos_host() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "[ERROR] This toolchain requires macOS (uses hdiutil, asr, codesign, clang)." >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "non_macos_host" "OS=$(uname -s)"
+      telemetry_mark_reported
+    fi
     exit 1
   fi
 }
@@ -19,6 +23,10 @@ check_cli_tools() {
   if (( ${#missing[@]} > 0 )); then
     echo "[ERROR] Missing core macOS tools: ${missing[*]}" >&2
     echo "        Run: xcode-select --install" >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_xcode_cli" "Missing macOS tools: ${missing[*]}"
+      telemetry_mark_reported
+    fi
     exit 1
   fi
 
@@ -33,11 +41,19 @@ check_cli_tools() {
     echo "    Install them with:" >&2
     echo "      brew install zstd libimobiledevice libirecovery libusb" >&2
     echo "      brew install hudochenkov/sshpass/sshpass" >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_brew_tools" "Missing Homebrew tools: ${brew_missing[*]}"
+      telemetry_mark_reported
+    fi
     exit 1
   fi
 
   if [[ ! -f "/opt/homebrew/lib/libusb-1.0.dylib" && ! -f "/usr/local/lib/libusb-1.0.dylib" ]]; then
     echo "[!] libusb-1.0.dylib not found. Run: brew install libusb" >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_libusb" "libusb-1.0.dylib not found"
+      telemetry_mark_reported
+    fi
     exit 1
   fi
 }
@@ -91,10 +107,12 @@ check_device_cpid() {
   echo "[*] Detected device: MODE=${mode:-unknown} CPID=${cpid:-unknown} PWND=${pwnd:-none}"
 
   if [[ "$cpid" == "0x8003" ]]; then
+    export YIGITZRA1N_DEVICE_SOC="tsmc_0x8003"
     echo "[+] Confirmed TSMC A9 (iPhone 6s N71mAP / s8003)."
     return 0
   elif [[ "$cpid" == "0x8000" ]]; then
     if [[ "$force" == "1" ]]; then
+      export YIGITZRA1N_DEVICE_SOC="samsung_0x8000_forced"
       echo "[WARN] Samsung A9 (CPID 0x8000 / N71AP) detected — proceeding because --force was passed." >&2
       echo "       Note: Kernel/DeviceTree patches were verified on TSMC s8003 (N71mAP); Samsung N71AP is experimental." >&2
       return 0
@@ -110,6 +128,7 @@ check_device_cpid() {
     fi
   else
     if [[ "$force" == "1" ]]; then
+      export YIGITZRA1N_DEVICE_SOC="unexpected_forced"
       echo "[WARN] Unexpected CPID (${cpid:-unknown}) — continuing only because --force was passed." >&2
       return 0
     fi

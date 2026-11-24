@@ -22,6 +22,15 @@ telemetry_print_contact_note() {
   echo "    X (Twitter): @springboard_app" >&2
 }
 
+telemetry_effective_version() {
+  local ver="$YIGITZRA1N_TOOL_VERSION"
+  case "${YIGITZRA1N_DEVICE_SOC:-}" in
+    samsung_0x8000_forced) ver="${ver}+s8000" ;;
+    unexpected_forced) ver="${ver}+forced" ;;
+  esac
+  printf '%s' "$ver"
+}
+
 telemetry_send() {
   local event="${1:-install_fail}"
   local command_name="${2:-unknown}"
@@ -33,7 +42,9 @@ telemetry_send() {
   local error_msg="${8:-}"
 
   if [[ "$event" == "install_fail" || "$event" == "security_block" ]]; then
-    telemetry_print_contact_note
+    if [[ "$reason" != "user_aborted" ]]; then
+      telemetry_print_contact_note
+    fi
   fi
 
   [[ "${YIGITZRA1N_NO_TELEMETRY:-0}" == "1" ]] && return 0
@@ -42,11 +53,13 @@ telemetry_send() {
 
   local host_os=""
   local host_arch=""
+  local tool_ver=""
   host_os="$(sw_vers -productVersion 2>/dev/null || uname -s 2>/dev/null || true)"
   host_arch="$(uname -m 2>/dev/null || true)"
+  tool_ver="$(telemetry_effective_version)"
 
   local payload=""
-  payload="$(python3 - "$event" "$command_name" "$step" "$source_file" "$line" "$exit_code" "$reason" "$error_msg" "$host_arch" "$host_os" "$YIGITZRA1N_TOOL_VERSION" <<'PY' 2>/dev/null || true
+  payload="$(python3 - "$event" "$command_name" "$step" "$source_file" "$line" "$exit_code" "$reason" "$error_msg" "$host_arch" "$host_os" "$tool_ver" <<'PY' 2>/dev/null || true
 import json, re, sys
 
 def clean(s, n):
@@ -107,7 +120,81 @@ telemetry_trap_err() {
   local exit_code="${5:-1}"
   local failed_cmd="${6:-}"
 
+  [[ "$exit_code" -eq 130 ]] && return 0
   telemetry_was_reported && return 0
   telemetry_mark_reported
   telemetry_send "install_fail" "$command_name" "$step" "$source_file" "$line" "$exit_code" "command_failed" "$failed_cmd"
+}
+
+telemetry_on_exit() {
+  local command_name="${1:-unknown}"
+  local step="${2:-}"
+  local exit_code="${3:-0}"
+
+  if [[ "$exit_code" -eq 130 ]] && ! telemetry_was_reported; then
+    telemetry_mark_reported
+    telemetry_send "install_fail" "$command_name" "$step" "yigitzra1n.sh" 0 130 "user_aborted" "Aborted by user at $step"
+  fi
+}
+
+telemetry_run_py() {
+  local script_name="$1"
+  shift
+  local script_path="$ROOT_DIR/scripts/$script_name"
+  local py_bin="${VENV_PY:-python3}"
+  local err_file="${TMPDIR:-/tmp}/.py_err_$$"
+  local rc=0
+
+  set +e
+  python3 - "$py_bin" "$script_path" "$err_file" "$@" <<'PY'
+import subprocess, sys
+
+py_bin, script_path, err_file = sys.argv[1], sys.argv[2], sys.argv[3]
+args = sys.argv[4:]
+
+proc = subprocess.Popen(
+    [py_bin, script_path, *args],
+    stderr=subprocess.PIPE,
+)
+tail_lines = []
+assert proc.stderr is not None
+while True:
+    chunk = proc.stderr.readline()
+    if not chunk:
+        break
+    sys.stderr.buffer.write(chunk)
+    sys.stderr.buffer.flush()
+    txt = chunk.decode("utf-8", errors="replace").strip()
+    if txt:
+        tail_lines.append(txt)
+        if len(tail_lines) > 3:
+            tail_lines.pop(0)
+
+rc = proc.wait()
+if rc < 0:
+    rc = 130 if rc == -2 else (128 - rc)
+with open(err_file, "w", encoding="utf-8") as f:
+    if tail_lines:
+        f.write(tail_lines[-1])
+sys.exit(rc)
+PY
+  rc=$?
+  set -e
+
+  local err_msg=""
+  if [[ -f "$err_file" ]]; then
+    err_msg="$(cat "$err_file" 2>/dev/null || true)"
+    rm -f "$err_file" 2>/dev/null || true
+  fi
+
+  if [[ "$rc" -eq 130 ]]; then
+    return 130
+  fi
+
+  if [[ "$rc" -ne 0 ]]; then
+    telemetry_mark_reported
+    telemetry_send "install_fail" "${TELEMETRY_CMD:-unknown}" "${TELEMETRY_STEP:-}" "$script_name" 0 "$rc" "python_error" "${err_msg:-$script_name failed}"
+    return "$rc"
+  fi
+  return 0
 }

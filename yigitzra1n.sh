@@ -88,6 +88,8 @@ export TELEMETRY_PARENT=1
 export TELEMETRY_MARKER_FILE="$BUILD_DIR/.tmp/.telemetry_reported"
 rm -f "$TELEMETRY_MARKER_FILE" 2>/dev/null || true
 telemetry_track_first_run "$ROOT_DIR" "$CMD"
+trap 'exit 130' INT
+trap 'telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$?"' EXIT
 trap 'telemetry_trap_err "$TELEMETRY_CMD" "$TELEMETRY_STEP" "yigitzra1n.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR
 
 find_ipsw() {
@@ -489,7 +491,7 @@ cmd_prepare() {
 
   TELEMETRY_STEP="PREPARE_4_ENGINE"
   echo ">>> [yigitzra1n 4/7] Preparing local restore/boot engine & extracting PongoOS modules..."
-  "$VENV_PY" "$ROOT_DIR/scripts/02_patch_engine.py" \
+  telemetry_run_py "02_patch_engine.py" \
     --raw-dir "$ROOT_DIR/.cache/engine/raw" \
     --out-dir "$ENGINE_DIR" \
     --api-dir "$LOCAL_API_DIR" \
@@ -497,12 +499,12 @@ cmd_prepare() {
 
   TELEMETRY_STEP="PREPARE_5_KERNEL_DT"
   echo ">>> [yigitzra1n 5/7] Building kernelcache v6 & DeviceTree v5 from stock IPSWs..."
-  "$VENV_PY" "$ROOT_DIR/scripts/03_build_kernel_v6.py" \
+  telemetry_run_py "03_build_kernel_v6.py" \
     --ipsw-1588 "$ipsw_1588" \
     --ipsw-ipad5 "$ipsw_ipad5" \
     --out "$BUILD_DIR/kernelcache.release.n71_v6.im4p"
 
-  "$VENV_PY" "$ROOT_DIR/scripts/04_build_dtree_v5.py" \
+  telemetry_run_py "04_build_dtree_v5.py" \
     --ipsw-1588 "$ipsw_1588" \
     --ipsw-ipad5 "$ipsw_ipad5" \
     --out "$BUILD_DIR/DeviceTree.n71map_v5.im4p" \
@@ -510,7 +512,7 @@ cmd_prepare() {
 
   TELEMETRY_STEP="PREPARE_6_RAMDISK"
   echo ">>> [yigitzra1n 6/7] Building Restore RamDisk (14-patch) & Maintenance SSH RamDisk..."
-  "$VENV_PY" "$ROOT_DIR/scripts/05_build_ramdisk.py" \
+  telemetry_run_py "05_build_ramdisk.py" \
     --ipsw-ipad5 "$ipsw_ipad5" \
     --out-restore-rd "$BUILD_DIR/098-68700-067.dmg" \
     --out-restore-tc "$BUILD_DIR/098-68700-067.dmg.trustcache" \
@@ -690,7 +692,7 @@ cmd_boot() {
   [[ -n "$BOOT_ARGS" ]] && py_args+=(--boot-args "$BOOT_ARGS")
   [[ "$QUIET" -eq 1 ]] && py_args+=(--quiet)
   [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
-  "$VENV_PY" "$ROOT_DIR/scripts/pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
+  telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
   if [[ "$TELEMETRY_CMD" == "boot" ]]; then
     telemetry_send "install_success" "boot" "BOOT_DONE" "yigitzra1n.sh" "$LINENO" 0 "booted" ""
   fi
@@ -709,7 +711,7 @@ cmd_ssh_ramdisk() {
   local py_args=(--ssh-ramdisk)
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
   [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
-  "$VENV_PY" "$ROOT_DIR/scripts/pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
+  telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
 
   echo ""
   echo "[*] Starting USB port forward (iproxy 2222 -> 22)..."
@@ -750,15 +752,17 @@ cmd_uninstall() {
   local py_args=(--ssh-ramdisk)
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
   [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
-  "$VENV_PY" "$ROOT_DIR/scripts/pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
+  telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
 
   local iproxy_pid=""
   local ssh_port="$DEVICE_PORT"
   cleanup_uninstall() {
+    local rc=$?
     if [[ -n "$iproxy_pid" ]]; then
       kill "$iproxy_pid" 2>/dev/null || true
       wait "$iproxy_pid" 2>/dev/null || true
     fi
+    telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$rc"
   }
   trap cleanup_uninstall EXIT
 
@@ -827,7 +831,7 @@ cmd_uninstall() {
   sshpass -p "${SSH_PASS:-alpine}" ssh "${ssh_opts[@]}" root@127.0.0.1 '/sbin/reboot' 2>/dev/null || true
 
   cleanup_uninstall
-  trap - EXIT
+  trap 'telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$?"' EXIT
   rm -f "$INSTALL_STATE_FILE"
   telemetry_send "install_success" "uninstall" "UNINSTALL_DONE" "yigitzra1n.sh" "$LINENO" 0 "uninstalled" ""
   sleep 5

@@ -41,6 +41,8 @@ IOS_SDK=""
 if ! IOS_SDK="$(find_iphoneos_sdk)"; then
   echo "[!] iPhoneOS SDK not found. Install Xcode (or set DEVELOPER_DIR to Xcode.app/Contents/Developer)." >&2
   echo "    (hw_init_probe.bin and fast_dns.dylib were built in $BIN_DIR.)" >&2
+  telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_3_BUILD}" "build_all.sh" "$LINENO" 1 "missing_iphoneos_sdk" "iPhoneOS SDK (Xcode) not found"
+  telemetry_mark_reported
   exit 1
 fi
 echo "[*] Using iPhoneOS SDK: $IOS_SDK"
