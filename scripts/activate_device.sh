@@ -185,7 +185,7 @@ PY
 )"
 
 ACTIVATE_STEP="VERIFY_ENV_AND_RECEIPT"
-set +e
+rc=0
 run_ssh "
   set -e
   export PATH=\"/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
@@ -196,9 +196,7 @@ run_ssh "
   /sbin/mount -u -w / 2>/dev/null || /sbin/mount -uw / 2>/dev/null || mount -uw / 2>/dev/null || true
   cat > '$REC_REMOTE_PATH'
   chmod 644 '$REC_REMOTE_PATH'
-" < "$WORK_TMP/receipt.plist"
-rc=$?
-set -e
+" < "$WORK_TMP/receipt.plist" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
   if [[ "$rc" -eq 78 ]]; then
     telemetry_send "security_block" "${TELEMETRY_CMD:-activate}" "$ACTIVATE_STEP" "activate_device.sh" "$LINENO" 78 "missing_yigitzra1n_daemons_78" "Target environment validation failed (78)"
@@ -210,7 +208,7 @@ if [[ "$rc" -ne 0 ]]; then
 fi
 
 ACTIVATE_STEP="CHECK_SKIP_SETUP"
-set +e
+rc=0
 run_ssh '
   set -e
   export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -221,9 +219,7 @@ run_ssh '
   chown root:wheel /usr/local/bin/ios16_skip_setup.new 2>/dev/null || true
   mv -f /usr/local/bin/ios16_skip_setup.new /usr/local/bin/ios16_skip_setup
   /usr/local/bin/ios16_skip_setup --check
-' < "$BIN_DIR/ios16_skip_setup"
-rc=$?
-set -e
+' < "$BIN_DIR/ios16_skip_setup" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
   case "$rc" in
     77) telemetry_send "security_block" "${TELEMETRY_CMD:-activate}" "$ACTIVATE_STEP" "activate_device.sh" "$LINENO" 77 "target_hw_os_mismatch_77" "ios16_skip_setup check returned 77" ;;
@@ -252,13 +248,11 @@ run_ssh '
   cat /usr/local/share/backups/mobileactivationd.orig
 ' > "$WORK_TMP/mobileactivationd.orig"
 
-set +e
+rc=0
 patch_err="$(python3 "$ROOT_DIR/scripts/patch_mobileactivationd.py" \
   --in "$WORK_TMP/mobileactivationd.orig" \
   --out "$WORK_TMP/mobileactivationd.patched" \
-  --gate "$GATE_TOKEN" 2>&1)"
-rc=$?
-set -e
+  --gate "$GATE_TOKEN" 2>&1)" || rc=$?
 printf '%s\n' "$patch_err"
 if [[ "$rc" -ne 0 ]]; then
   if [[ "$patch_err" == *"code 78"* || "$patch_err" == *"Unsupported target binary"* ]]; then
@@ -284,7 +278,7 @@ run_ssh '
 
 ACTIVATE_STEP="RUN_SKIP_SETUP"
 echo "[4/4] Finalizing setup & restarting SpringBoard..."
-set +e
+rc=0
 run_ssh '
   set -e
   export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -301,15 +295,7 @@ run_ssh '
   }
   sleep 1
   /usr/local/bin/ios16_skip_setup
-  killall -9 budd Setup SpringBoard 2>/dev/null || {
-    for pid in $(ps -A -o pid,comm | sed -n "/budd/s/^[ ]*\([0-9]*\).*/\1/p;/\/Applications\/Setup\.app\/Setup/s/^[ ]*\([0-9]*\).*/\1/p;/SpringBoard\.app\/SpringBoard/s/^[ ]*\([0-9]*\).*/\1/p"); do
-      kill -9 "$pid" 2>/dev/null || true
-    done
-  }
-  sync
-'
-rc=$?
-set -e
+' || rc=$?
 if [[ "$rc" -ne 0 ]]; then
   case "$rc" in
     77) telemetry_send "security_block" "${TELEMETRY_CMD:-activate}" "$ACTIVATE_STEP" "activate_device.sh" "$LINENO" 77 "target_hw_os_mismatch_77" "ios16_skip_setup returned 77" ;;
@@ -319,6 +305,20 @@ if [[ "$rc" -ne 0 ]]; then
   esac
   telemetry_mark_reported
   exit "$rc"
+fi
+
+rc_ui=0
+run_ssh '
+  export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  killall -9 budd Setup SpringBoard 2>/dev/null || {
+    for pid in $(ps -A -o pid,comm | sed -n "/budd/s/^[ ]*\([0-9]*\).*/\1/p;/\/Applications\/Setup\.app\/Setup/s/^[ ]*\([0-9]*\).*/\1/p;/SpringBoard\.app\/SpringBoard/s/^[ ]*\([0-9]*\).*/\1/p"); do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  }
+  sync
+' || rc_ui=$?
+if [[ "$rc_ui" -ne 0 && "$rc_ui" -ne 255 ]]; then
+  echo "[!] Non-fatal UI restart exit code ($rc_ui); continuing..." >&2
 fi
 
 if command -v ssh-keygen >/dev/null 2>&1; then
