@@ -57,7 +57,10 @@ def extract_soft_aks_funcs(obj_path: Path):
     funcs = {}
     for idx, (name, start_off) in enumerate(ordered):
         end_off = ordered[idx + 1][1] if idx + 1 < len(ordered) else text_sz
-        funcs[name] = data[text_fo + start_off : text_fo + end_off]
+        chunk = data[text_fo + start_off : text_fo + end_off]
+        while len(chunk) >= 4 and chunk.endswith(b"\x1f\x20\x03\xd5"):
+            chunk = chunk[:-4]
+        funcs[name] = chunk
     return funcs["_soft_aks_wrap_key"], funcs["_soft_aks_unwrap_key"]
 
 def patch_securityd(src_bin: Path, obj_path: Path, ent_plist: Path, out_bin: Path) -> None:
