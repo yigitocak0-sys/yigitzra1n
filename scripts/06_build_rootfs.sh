@@ -149,6 +149,9 @@ PY
 cp -f "$BUILD_DIR/kernelcache.release.n71_v6.im4p" "$HYBRID_DIR/kernelcache.release.n71"
 cp -f "$BUILD_DIR/kernelcache.release.n71_v6.im4p" "$HYBRID_DIR/kernelcache.release.ipad6f"
 cp -f "$BUILD_DIR/DeviceTree.n71map_v5.im4p" "$HYBRID_DIR/Firmware/all_flash/DeviceTree.n71map.im4p"
+if [[ -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" ]]; then
+  cp -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" "$HYBRID_DIR/Firmware/all_flash/DeviceTree.n71ap.im4p"
+fi
 cp -f "$BUILD_DIR/098-68700-067.dmg" "$HYBRID_DIR/098-68700-067.dmg"
 ln -sf "098-68700-067.dmg" "$HYBRID_DIR/098-68739-067.dmg"
 cp -f "$BUILD_DIR/098-68700-067.dmg.trustcache" "$HYBRID_DIR/Firmware/098-68700-067.dmg.trustcache"

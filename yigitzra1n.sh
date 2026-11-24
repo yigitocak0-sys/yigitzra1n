@@ -569,6 +569,13 @@ cmd_prepare() {
     --out "$BUILD_DIR/DeviceTree.n71map_v5.im4p" \
     --out-ramdisk "$BUILD_DIR/DeviceTree.n71map_ramdisk.im4p"
 
+  telemetry_run_py "04_build_dtree_v5.py" \
+    --ipsw-1588 "$ipsw_1588" \
+    --ipsw-ipad5 "$ipsw_ipad5" \
+    --board n71ap \
+    --out "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" \
+    --out-ramdisk "$BUILD_DIR/DeviceTree.n71ap_ramdisk.im4p"
+
   TELEMETRY_STEP="PREPARE_6_RAMDISK"
   echo ">>> [yigitzra1n 6/7] Building Restore RamDisk (14-patch) & Maintenance SSH RamDisk..."
   telemetry_run_py "05_build_ramdisk.py" \
@@ -591,6 +598,32 @@ cmd_prepare() {
   echo "      ./yigitzra1n.sh install"
 }
 
+ensure_n71ap_devicetree() {
+  if [[ ! -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" ]]; then
+    local f15 f16
+    f15="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_6S_1588_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
+    f16="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_IPAD5_16716_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$f15" && -n "$f16" ]]; then
+      echo "[*] Building DeviceTree v5 for Samsung A9 (N71AP)..."
+      telemetry_run_py "04_build_dtree_v5.py" \
+        --ipsw-1588 "$f15" \
+        --ipsw-ipad5 "$f16" \
+        --board n71ap \
+        --out "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" \
+        --out-ramdisk "$BUILD_DIR/DeviceTree.n71ap_ramdisk.im4p"
+    fi
+  fi
+  if [[ -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" ]]; then
+    local d
+    for d in "$BUILD_DIR/hybrid_ipsw/Firmware/all_flash" "$BUILD_DIR/ssh_ramdisk_ipsw/Firmware/all_flash"; do
+      if [[ -d "$d" ]] && ! cmp -s "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" "$d/DeviceTree.n71ap.im4p"; then
+        cp -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" "$d/DeviceTree.n71ap.im4p"
+        echo "[+] Staged patched DeviceTree.n71ap.im4p in $d"
+      fi
+    done
+  fi
+}
+
 cmd_install() {
   TELEMETRY_STEP="INSTALL_PREFLIGHT"
   check_macos_host
@@ -600,6 +633,7 @@ cmd_install() {
     echo "[ERROR] Build outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_n71ap_devicetree
   local ipsw_1588
   ipsw_1588="$(find_ipsw "$IPSW_6S_1588_GLOB")"
   ensure_local_server
@@ -745,6 +779,7 @@ cmd_boot() {
     echo "[ERROR] Build outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_n71ap_devicetree
   prompt_dfu "Tethered Boot — iOS 16.7.16 (DFU Mode)"
   local py_args=()
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
@@ -766,6 +801,7 @@ cmd_ssh_ramdisk() {
     echo "[ERROR] SSH RamDisk outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_n71ap_devicetree
   prompt_dfu "Maintenance SSH RamDisk Boot (DFU Mode)"
   local py_args=(--ssh-ramdisk)
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
@@ -789,6 +825,7 @@ cmd_uninstall() {
     echo "[ERROR] SSH RamDisk outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_n71ap_devicetree
 
   echo "======================================================================"
   echo "  yigitzra1n — Uninstall / Prepare Device for Stock iOS 15.8.8 Restore"
