@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/telemetry.sh"
+trap 'telemetry_trap_err "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_3_BUILD}" "build_all.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"
 mkdir -p "$BUILD_DIR" "$BIN_DIR"
