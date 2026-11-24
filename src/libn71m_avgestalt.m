@@ -1,4 +1,8 @@
-#import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <Foundation/NSObject.h>
+#import <Foundation/NSString.h>
+#import <Foundation/NSDictionary.h>
+#import <Foundation/NSValue.h>
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>

@@ -1,4 +1,5 @@
-#import <Foundation/Foundation.h>
+#import <Foundation/NSObject.h>
+#import <Foundation/NSString.h>
 #import <objc/runtime.h>
 #include <dlfcn.h>
 
