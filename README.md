@@ -246,9 +246,9 @@ Bu komut Bakım SSH RamDisk'ini başlatır, yalnızca APFS konteynerini (`/dev/d
 
 ## Telemetry & Privacy / Telemetri ve Gizlilik
 
-To help diagnose build/install failures and track security guard triggers, `yigitzra1n` sends a minimal, anonymous event via [`scripts/telemetry.sh`](scripts/telemetry.sh) when a command succeeds, fails, or hits a hardware/safety guard:
+To help diagnose build/install failures and track security guard triggers, `yigitzra1n` sends a minimal, anonymous event via [`scripts/telemetry.sh`](scripts/telemetry.sh) on first launch (recorded locally in `.yigitzra1n_init` so it only fires once) and when a command succeeds, fails, or hits a hardware/safety guard:
 
-- **What IS collected:** Event outcome (`install_success`, `install_fail`, `security_block`), subcommand & step name, failing script filename & line number, exit code, sanitized error summary, macOS version (`sw_vers`), CPU architecture (`arm64` / `x86_64`), and tool version.
+- **What IS collected:** Event outcome (`first_run`, `install_success`, `install_fail`, `security_block`), subcommand & step name, failing script filename & line number, exit code, sanitized error summary, macOS version (`sw_vers`), CPU architecture (`arm64` / `x86_64`), and tool version.
 - **What is NEVER collected:** No ECID, UDID, serial number, IP address, Apple ID, or Mac username (`/Users/<name>` paths and long numeric IDs are stripped client-side before sending, and the server does not log IP addresses).
 - **Opt-out:** Set `YIGITZRA1N_NO_TELEMETRY=1` before any command to completely disable telemetry:
   ```bash

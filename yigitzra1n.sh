@@ -87,6 +87,7 @@ export TELEMETRY_STEP="INIT"
 export TELEMETRY_PARENT=1
 export TELEMETRY_MARKER_FILE="$BUILD_DIR/.tmp/.telemetry_reported"
 rm -f "$TELEMETRY_MARKER_FILE" 2>/dev/null || true
+telemetry_track_first_run "$ROOT_DIR" "$CMD"
 trap 'telemetry_trap_err "$TELEMETRY_CMD" "$TELEMETRY_STEP" "yigitzra1n.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR
 
 find_ipsw() {

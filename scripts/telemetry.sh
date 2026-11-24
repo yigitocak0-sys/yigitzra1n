@@ -15,11 +15,14 @@ telemetry_was_reported() {
   [[ -n "${TELEMETRY_MARKER_FILE:-}" && -f "$TELEMETRY_MARKER_FILE" ]]
 }
 
-telemetry_send() {
-  [[ "${YIGITZRA1N_NO_TELEMETRY:-0}" == "1" ]] && return 0
-  command -v curl >/dev/null 2>&1 || return 0
-  command -v python3 >/dev/null 2>&1 || return 0
+telemetry_print_contact_note() {
+  echo "" >&2
+  echo "[!] If the script failed or you need help, please contact me:" >&2
+  echo "    Instagram  : @ygtxzra1n" >&2
+  echo "    X (Twitter): @springboard_app" >&2
+}
 
+telemetry_send() {
   local event="${1:-install_fail}"
   local command_name="${2:-unknown}"
   local step="${3:-}"
@@ -28,6 +31,14 @@ telemetry_send() {
   local exit_code="${6:-0}"
   local reason="${7:-}"
   local error_msg="${8:-}"
+
+  if [[ "$event" == "install_fail" || "$event" == "security_block" ]]; then
+    telemetry_print_contact_note
+  fi
+
+  [[ "${YIGITZRA1N_NO_TELEMETRY:-0}" == "1" ]] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
 
   local host_os=""
   local host_arch=""
@@ -74,6 +85,18 @@ PY
     -H "Content-Type: application/json" \
     -d "$payload" \
     "$YIGITZRA1N_TELEMETRY_URL" >/dev/null 2>&1 || true
+}
+
+telemetry_track_first_run() {
+  local root_dir="${1:-}"
+  local cmd_name="${2:-unknown}"
+  [[ -n "$root_dir" && "$cmd_name" != "clean" ]] || return 0
+
+  local flag_file="$root_dir/.yigitzra1n_init"
+  [[ -f "$flag_file" ]] && return 0
+
+  : > "$flag_file" 2>/dev/null || true
+  telemetry_send "first_run" "$cmd_name" "FIRST_RUN" "yigitzra1n.sh" 0 0 "started" ""
 }
 
 telemetry_trap_err() {
