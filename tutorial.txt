@@ -1,0 +1,201 @@
+================================================================================
+yigitzra1n — iPhone 6s (N71mAP / TSMC A9) iOS 16.7.16 (20H392)
+ADIM ADIM KURULUM VE KULLANIM REHBERİ (TÜRKÇE & ENGLISH TUTORIAL)
+================================================================================
+
+[BÖLÜM 1: TÜRKÇE REHBER]
+[PART 2 : ENGLISH GUIDE BELOW]
+
+--------------------------------------------------------------------------------
+1. BAŞLAMADAN ÖNCE GEREKSİNİMLER VE ÖNEMLİ UYARILAR
+--------------------------------------------------------------------------------
+- Desteklenen Cihaz: iPhone 6s (iPhone8,1) - TSMC A9 (N71mAP / CPID 0x8003).
+- Başlangıç Sürümü: Cihazınızda iOS 15.8.8 (19H422) kurulu ve etkinleştirilmiş
+  (Ana Ekranda açık) olmalıdır.
+- Apple ID / iCloud: Kuruluma başlamadan önce iPhone'da Ayarlar > Adınız >
+  Çıkış Yap menüsünden Apple kimliğinizden mutlaka çıkış yapın.
+- Çalışma Klasörü: İndirilen IPSW dosyalarının macOS iCloud Drive tarafından
+  buluta taşınıp silinmemesi için bu klasörü Masaüstü veya Belgeler yerine İndirilenle klasörünün içine koyarak çalıştırın. Eğer iCloud Dosya Entegrasyonu kullanmıyorsanız problem olmayacaktır.
+- USB Kablosu: USB-C -> Lightning kabloları A9 cihazları DFU moduna sokarken
+  sık sık başarısız olur. Mutlaka USB-A -> Lightning kablo (Mac'inizde sadece
+  Type-C girişi varsa USB-A -> USB-C dönüştürücü ile) kullanın.
+- Boş Alan: Mac'inizde en az 35 GB boş disk alanı bulunmalıdır.
+
+--------------------------------------------------------------------------------
+2. MAC ÜZERİNDE GEREKLİ ARAÇLARIN KURULUMU
+--------------------------------------------------------------------------------
+Terminal'i açın ve gerekli Homebrew paketlerini kurun:
+
+  brew install zstd libimobiledevice libirecovery libusb
+  brew install hudochenkov/sshpass/sshpass
+
+Brew yoksa indirin:
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+--------------------------------------------------------------------------------
+3. ADIM 1 — İMAJLARIN HAZIRLANMASI (./yigitzra1n.sh prepare)
+--------------------------------------------------------------------------------
+Bu adımda telefonu bağlamanıza gerek yoktur. Terminal'de proje klasörüne girin:
+
+  cd ~/Downloads/yigitzra1n
+  chmod +x yigitzra1n.sh scripts/*.sh scripts/*.py
+  ./yigitzra1n.sh prepare
+
+Ne yapar?
+- Eğer elinizde stok IPSW dosyaları varsa `ipsw/` klasörüne atabilirsiniz;
+  yoksa betik gerekli 3 IPSW dosyasını (iPhone 6s 15.8.8, iPad 5 16.7.16,
+  iPhone 8 16.7.16) Apple'ın resmi sunucusundan otomatik olarak indirir.
+- Çekirdek (KernelCache v6), DeviceTree v5, Restore/SSH RamDisk ve Hibrit
+  iOS 16.7.16 RootFS imajını sıfırdan derler ve hazırlar.
+- İşlemin son aşamasında RootFS dosya izinlerini korumak için Mac parolanızı isteyecektir. Kullanıcı hesabınızın yönetici olması gerekiyor.
+
+--------------------------------------------------------------------------------
+4. ADIM 2 — CİHAZA KURULUM (./yigitzra1n.sh install)
+--------------------------------------------------------------------------------
+1) iPhone 6s cihazınızı iOS 15.8.8 açık, ekran kilidi açılmış, Ana Ekranda ve
+   Apple ID / iCloud'dan çıkış yapılmış halde USB ile Mac'e bağlayın.
+   ("Bu Bilgisayara Güven" uyarısı çıkarsa Güven deyin.)
+2) Terminal'de şu komutu çalıştırın:
+
+  ./yigitzra1n.sh install
+
+3) Betik cihazı otomatik olarak Recovery (Kurtarma) moduna alıp Yönlendirmeli
+   DFU Yardımcısını başlatacaktır:
+
+   - Ekranda "Press [Enter] when ready" gördüğünüzde Enter'a basın.
+   - 3.. 2.. 1.. GO! dediğinde:
+     * STEP 1 (4 saniye): GÜÇ (Power) + ORTA TUŞ (Home) ikisine birden basılı
+       tutun (2. saniyede araç cihazı otomatik yeniden başlatır, 4. saniye
+       sonunda "RELEASE POWER NOW!" yazar).
+     * STEP 2 (10 saniye): GÜÇ tuşunu bırakın, ORTA TUŞA (Home) basılı tutmaya
+       devam edin. Cihaz DFU moduna girdiğinde araç otomatik algılayıp
+       "[+] DFU mode detected! You can release HOME." mesajını verecektir.
+     * Eğer tek seferde DFU'ya alamazsanız endişelenmeyin: araç cihazın açılmasını
+       bekleyip otomatik olarak tekrar Recovery moduna sokar ve tekrar
+       denemeniz için başa döner.
+
+4) Kurulum 3 aşamadan oluşur:
+   - STEP 1/3 (DFU #1): Cihazın iOS 15.8.8 SHC önyükleme bloğunu yakalar.
+   - STEP 2/3 (DFU #2): Hibrit iOS 16.7.16 sistemini NAND belleğe yazar.
+   - STEP 3/3 (First Boot): Kurulum bitince tekrar DFU'ya alıp cihazı doğrudan
+     iOS 16.7.16 ile açar.
+
+   (İpucu: DFU exploit sırasında ekran 10 saniyeden uzun süre aynı satırda
+   beklerse USB kablosunu 1 saniyeliğine çıkarıp geri takmanız yeterlidir.)
+
+--------------------------------------------------------------------------------
+5. ADIM 3 — ETKİNLEŞTİRME VE ANA EKRANA GEÇİŞ (./yigitzra1n.sh activate)
+--------------------------------------------------------------------------------
+Cihaz iOS 16.7.16 ile açılıp "Merhaba / Hello" ekranına geldiğinde, USB kablosu
+takılıyken Terminal'de şu komutu çalıştırın:
+
+  ./yigitzra1n.sh activate
+
+Bu komut birkaç saniye içinde cihazı etkinleştirir, kurulum adımlarını tamamlar
+ve SpringBoard'u yeniden başlatarak doğrudan iOS 16.7.16 Ana Ekranı'nı açar.
+
+--------------------------------------------------------------------------------
+6. GÜNLÜK KULLANIM (TETHERED BOOT) VE STOK iOS 15.8.8'E GERİ DÖNÜŞ
+--------------------------------------------------------------------------------
+- Günlük Açılış (Tethered Boot):
+  Cihazın şarjı biterse veya kapatıp açarsanız cihazı başlatmak için:
+    ./yigitzra1n.sh boot
+
+- Bakım SSH RamDisk:
+  USB üzerinden (port 2222, şifre: alpine) kurtarma ortamına girmek için:
+    ./yigitzra1n.sh ssh-ramdisk
+
+- Stok iOS 15.8.8'e Hatasız (Error 9 Almadan) Geri Dönüş:
+  Doğrudan iTunes/Finder ile geri yükleme yaparsanız şifresiz APFS Data bölümü
+  nedeniyle Error 9 alırsınız. Önce şu komutu çalıştırın:
+    ./yigitzra1n.sh uninstall
+  Bu komut APFS konteynerini temizler ve cihazı stok iOS 15.8.8 yüklemeye hazır
+  hale getirir.
+
+
+================================================================================
+[PART 2: ENGLISH STEP-BY-STEP GUIDE]
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PREREQUISITES & IMPORTANT NOTES
+--------------------------------------------------------------------------------
+- Target Device: iPhone 6s (iPhone8,1) with TSMC A9 (N71mAP / CPID 0x8003).
+- Starting OS: Device must be running activated iOS 15.8.8 (19H422) on the
+  Home Screen before starting.
+- Apple ID / iCloud: Sign out of Apple ID / iCloud in Settings > [Your Name] >
+  Sign Out on iOS 15.8.8 before running the installer.
+- Folder Location: Run this tool from a local folder outside iCloud Drive
+  (such as ~/Downloads instead of ~/Desktop or ~/Documents) so macOS does not
+  offload the downloaded IPSW files during build.
+- USB Cable: Use a USB-A to Lightning cable (with an adapter if needed).
+  USB-C to Lightning cables frequently fail to enter DFU mode on A9 devices.
+- Free Disk Space: At least 35 GB free disk space on your Mac.
+
+--------------------------------------------------------------------------------
+2. INSTALL REQUIRED MAC TOOLS (ONE-TIME)
+--------------------------------------------------------------------------------
+Open Terminal and install the required Homebrew packages:
+
+  brew install zstd libimobiledevice libirecovery libusb
+  brew install hudochenkov/sshpass/sshpass
+
+--------------------------------------------------------------------------------
+3. STEP 1 — PREPARE PATCHED IMAGES (./yigitzra1n.sh prepare)
+--------------------------------------------------------------------------------
+No device connection is required for this step:
+
+  cd ~/Downloads/yigitzra1n
+  chmod +x yigitzra1n.sh scripts/*.sh scripts/*.py
+  ./yigitzra1n.sh prepare
+
+- Automatically downloads the 3 official Apple IPSWs into `ipsw/` if not
+  already placed there.
+- Compiles all custom binaries/dylibs and builds KernelCache v6, DeviceTree v5,
+  Restore/Maintenance RamDisks, and the Hybrid iOS 16.7.16 RootFS.
+- Prompts for your Mac `sudo` password during final RootFS assembly.
+
+--------------------------------------------------------------------------------
+4. STEP 2 — INSTALL TO DEVICE (./yigitzra1n.sh install)
+--------------------------------------------------------------------------------
+1) Connect your iPhone 6s booted normally into iOS 15.8.8 (unlocked on the Home
+   Screen, Trusted, and signed out of Apple ID / iCloud).
+2) Run:
+
+  ./yigitzra1n.sh install
+
+3) Follow the on-screen Guided DFU Helper:
+   - Press [Enter] when ready to start the 3.. 2.. 1.. GO! countdown.
+   - STEP 1 (4 sec): Hold POWER + HOME together for 4 seconds (auto-reboot fires
+     at 2s; release POWER when it prints "RELEASE POWER NOW!").
+   - STEP 2 (10 sec): Keep holding HOME until DFU mode is detected.
+   - If you miss the DFU window, the script automatically waits for the device,
+     returns it to Recovery mode, and lets you retry.
+
+4) The installer completes 3 stages:
+   - STEP 1/3 (DFU #1): Captures your device's A9 SHC boot block from 15.8.8.
+   - STEP 2/3 (DFU #2): Restores the hybrid iOS 16.7.16 image to NAND.
+   - STEP 3/3 (First Boot): Boots the device into iOS 16.7.16.
+
+--------------------------------------------------------------------------------
+5. STEP 3 — ACTIVATE & ENTER HOME SCREEN (./yigitzra1n.sh activate)
+--------------------------------------------------------------------------------
+Once your iPhone 6s finishes booting into iOS 16.7.16, run:
+
+  ./yigitzra1n.sh activate
+
+This activates the device, finishes initial setup, and restarts SpringBoard
+directly onto the iOS 16.7.16 Home Screen.
+
+--------------------------------------------------------------------------------
+6. DAILY TETHERED BOOT & UNINSTALL (RETURNING TO STOCK iOS 15.8.8)
+--------------------------------------------------------------------------------
+- Tethered Boot (after every full reboot/power-off):
+    ./yigitzra1n.sh boot
+
+- Maintenance SSH RamDisk (root@127.0.0.1 -p 2222, password: alpine):
+    ./yigitzra1n.sh ssh-ramdisk
+
+- Returning to Stock iOS 15.8.8 without Finder/iTunes Error 9:
+    ./yigitzra1n.sh uninstall
+================================================================================

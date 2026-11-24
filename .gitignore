@@ -1,0 +1,26 @@
+# Build outputs, downloaded IPSWs, local runtime cache, and device-specific blobs
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.cache/
+build/
+out/
+work/
+ipsw/*.ipsw
+ipsw/*.part
+*.im4p
+*.img4
+*.dmg
+*.sparseimage
+*.dec
+*.bin
+*.dylib
+*.o
+*.tar.gz
+*.tar.zst
+*.zip
+*.log
+*.sisv
+*pteblock*.bin
+*shcblock*.bin

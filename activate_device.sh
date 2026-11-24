@@ -1,0 +1,1 @@
+scripts/activate_device.sh
