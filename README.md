@@ -18,8 +18,8 @@ An end-to-end, open-source build & tethered boot toolchain (**yigitzra1n**) that
 - **Required Starting OS on Device:** **iOS `15.8.8 (19H422)`** must be installed and activated on your device before running `install` (provides the signed A9 bootchain/SEP baseline). Make sure to sign out of Apple ID / iCloud in Settings before starting.
 - **Working Directory (Important):** Run the project from a local folder that is **not** managed by iCloud Drive (e.g., `~/Downloads` rather than `~/Desktop` or `~/Documents`) so macOS does not offload large IPSW files during build.
 - **USB Cable (Important):** **Avoid USB-C to Lightning cables** — they frequently fail to enter DFU mode on A9/checkm8 devices. Use a **USB-A to Lightning** cable (with a USB-A to USB-C adapter/hub if your Mac only has USB-C ports).
-- **Host Machine:** macOS (Apple Silicon recommended) with:
-  - Xcode (provides `iPhoneOS` SDK & `clang`)
+- **Host Machine:** macOS (Apple Silicon or Intel) with:
+  - **Xcode Command Line Tools** (`xcode-select --install`, ~500 MB) — **full 15 GB Xcode is NOT required** (if installed, its `iPhoneOS` SDK is used automatically; otherwise `prepare_ios_sdk.py` builds a lightweight iOS stub SDK from `CommandLineTools`).
   - Homebrew packages:
     ```bash
     brew install zstd libimobiledevice libirecovery libusb
@@ -135,8 +135,8 @@ Run the built-in uninstall helper to cleanly reset **only** the APFS container (
 - **Cihazda Kurulu Olması Gereken Başlangıç Sürümü:** Kuruluma (`install`) başlamadan önce cihazda **iOS `15.8.8 (19H422)`** kurulu ve etkinleştirilmiş olmalıdır. İşleme başlamadan önce cihazın Ayarlar menüsünden Apple ID / iCloud hesabınızdan çıkış yapın.
 - **Çalışma Klasörü (Önemli):** macOS iCloud Drive'ın büyük IPSW dosyalarını buluta taşıyıp (`dataless`) işlemi kesmesini önlemek için aracı `~/Desktop` (Masaüstü) veya `~/Documents` yerine **`~/Downloads` (İndirilenler)** gibi yerel bir klasörün içinden çalıştırın.
 - **USB Kablosu (Önemli):** A9 cihazlarda DFU moduna geçerken **USB-C - Lightning** kabloları donanımsal olarak sık sık başarısız olur. Mutlaka **USB-A - Lightning** kablo (gerekirse USB-A -> USB-C dönüştürücü adaptör/hub ile) kullanın.
-- **Bilgisayar (Host):** macOS (Apple Silicon önerilir):
-  - Xcode (`iPhoneOS` SDK ve `clang` derleyicisi için)
+- **Bilgisayar (Host):** macOS (Apple Silicon veya Intel):
+  - **Xcode Command Line Tools** (`xcode-select --install`, ~500 MB) — **15 GB'lık tam Xcode zorunlu değildir** (kuruluysa `iPhoneOS` SDK'sı kullanılır; değilse `CommandLineTools` içinden hafif bir iOS stub SDK otomatik oluşturulur).
   - Homebrew paketleri:
     ```bash
     brew install zstd libimobiledevice libirecovery libusb
@@ -235,7 +235,7 @@ Bu komut Bakım SSH RamDisk'ini başlatır, yalnızca APFS konteynerini (`/dev/d
 
 ## Repository Layout / Klasör Yapısı
 
-- `yigitzra1n.sh` — Ana komut satırı aracı (`prepare | install | boot | ssh-ramdisk | uninstall | activate | patch-device | clean`)
+- `yigitzra1n.sh` — Ana komut satırı aracı (`prepare | install | boot | ssh-ramdisk | uninstall | activate | patch-device | update | clean`) — açılışta GitHub güncellemelerini otomatik kontrol eder (`--no-update` ile atlanabilir)
 - `tutorial.txt` — Adım adım Türkçe & İngilizce kurulum rehberi (Step-by-step plain-text guide)
 - `config/firmware_urls.env` — Resmi Apple CDN bağlantıları ve açık kaynak paket adresleri
 - `src/` — Tüm C / Objective-C / Python kaynak kodları (`hw_init_probe.c`, `bootlogo_data.h`, `sn2400_charger_daemon.c`, `ios16_sshd_launcher.c`, `ssh_rd_init.c`, `ios16_skip_setup.c`, `libn71m_avgestalt.m`, `libn71m_tipsmodel.m`, `sleepd_stub.c`, `soft_aks.c`, `fast_dns.c`, `local_server.py`)

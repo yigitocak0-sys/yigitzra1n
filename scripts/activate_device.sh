@@ -57,17 +57,8 @@ ensure_skip_setup_binary() {
   fi
 
   local sdk=""
-  sdk="$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)"
-  if [[ -z "$sdk" || ! -d "$sdk" ]]; then
-    for app in /Applications/Xcode*.app; do
-      if [[ -d "$app/Contents/Developer" ]]; then
-        sdk="$(DEVELOPER_DIR="$app/Contents/Developer" xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)"
-        [[ -n "$sdk" && -d "$sdk" ]] && break
-      fi
-    done
-  fi
-  if [[ -z "$sdk" || ! -d "$sdk" ]]; then
-    echo "[ERROR] iPhoneOS SDK not found. Install Xcode (or set DEVELOPER_DIR)." >&2
+  if ! sdk="$(python3 "$ROOT_DIR/scripts/prepare_ios_sdk.py" "$ROOT_DIR")"; then
+    echo "[ERROR] No iPhoneOS SDK or macOS CommandLineTools SDK found. Run: xcode-select --install" >&2
     exit 1
   fi
 

@@ -24,13 +24,18 @@ ADIM ADIM KURULUM VE KULLANIM REHBERİ (TÜRKÇE & ENGLISH TUTORIAL)
 --------------------------------------------------------------------------------
 2. MAC ÜZERİNDE GEREKLİ ARAÇLARIN KURULUMU
 --------------------------------------------------------------------------------
-Terminal'i açın ve gerekli Homebrew paketlerini kurun:
+Terminal'i açın ve yalnızca Apple Command Line Tools ile Homebrew paketlerini kurun
+(15 GB'lık tam Xcode indirmeniz GEREKMEZ):
 
+  xcode-select --install
   brew install zstd libimobiledevice libirecovery libusb
   brew install hudochenkov/sshpass/sshpass
 
 Brew yoksa indirin:
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+Not: Araç çalıştırıldığında GitHub üzerinden otomatik güncelleme kontrolü yapar;
+istediğiniz zaman `./yigitzra1n.sh update` ile de son sürüme güncelleyebilirsiniz.
 
 --------------------------------------------------------------------------------
 3. ADIM 1 — İMAJLARIN HAZIRLANMASI (./yigitzra1n.sh prepare)
@@ -135,10 +140,15 @@ ve SpringBoard'u yeniden başlatarak doğrudan iOS 16.7.16 Ana Ekranı'nı açar
 --------------------------------------------------------------------------------
 2. INSTALL REQUIRED MAC TOOLS (ONE-TIME)
 --------------------------------------------------------------------------------
-Open Terminal and install the required Homebrew packages:
+Open Terminal and install Apple Command Line Tools + the Homebrew packages
+(full 15 GB Xcode is NOT required):
 
+  xcode-select --install
   brew install zstd libimobiledevice libirecovery libusb
   brew install hudochenkov/sshpass/sshpass
+
+Note: `yigitzra1n` automatically checks GitHub for updates on startup, or you
+can run `./yigitzra1n.sh update` manually anytime.
 
 --------------------------------------------------------------------------------
 3. STEP 1 — PREPARE PATCHED IMAGES (./yigitzra1n.sh prepare)

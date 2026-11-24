@@ -337,20 +337,8 @@ def collect_minimal_ssh_closure(stage: Path) -> list:
     return sorted(needed)
 
 def build_ramdisk_compat_dylibs(tmp_dir: Path, ent_none: bool = True) -> list:
-    sdk = ""
-    candidates = [[]]
-    for xcode_app in sorted(Path("/Applications").glob("Xcode*.app")):
-        dev_dir = xcode_app / "Contents/Developer"
-        if dev_dir.is_dir():
-            candidates.append([f"DEVELOPER_DIR={dev_dir}"])
-    for env_prefix in candidates:
-        cmd = (["env", *env_prefix] if env_prefix else []) + ["xcrun", "--sdk", "iphoneos", "--show-sdk-path"]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        if r.returncode == 0 and r.stdout.strip() and Path(r.stdout.strip()).is_dir():
-            sdk = r.stdout.strip()
-            break
-    if not sdk:
-        sdk = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
+    from prepare_ios_sdk import resolve_ios_sdk
+    sdk = resolve_ios_sdk(Path(__file__).resolve().parent.parent)
 
     stubs = [
         (

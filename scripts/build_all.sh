@@ -20,32 +20,15 @@ clang -target arm64-apple-darwin -Os -mkernel -ffreestanding -fno-stack-protecto
   "$ROOT_DIR/src/hw_init_probe.c" \
   -o "$BIN_DIR/hw_init_probe.bin"
 
-find_iphoneos_sdk() {
-  local sdk=""
-  if sdk="$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)" && [[ -d "$sdk" ]]; then
-    echo "$sdk"
-    return 0
-  fi
-  for app in /Applications/Xcode*.app; do
-    if [[ -d "$app/Contents/Developer" ]]; then
-      if sdk="$(DEVELOPER_DIR="$app/Contents/Developer" xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)" && [[ -d "$sdk" ]]; then
-        echo "$sdk"
-        return 0
-      fi
-    fi
-  done
-  return 1
-}
-
 IOS_SDK=""
-if ! IOS_SDK="$(find_iphoneos_sdk)"; then
-  echo "[!] iPhoneOS SDK not found. Install Xcode (or set DEVELOPER_DIR to Xcode.app/Contents/Developer)." >&2
+if ! IOS_SDK="$(python3 "$ROOT_DIR/scripts/prepare_ios_sdk.py" "$ROOT_DIR")"; then
+  echo "[!] No iPhoneOS SDK or macOS CommandLineTools SDK found. Run: xcode-select --install" >&2
   echo "    (hw_init_probe.bin and fast_dns.dylib were built in $BIN_DIR.)" >&2
-  telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_3_BUILD}" "build_all.sh" "$LINENO" 1 "missing_iphoneos_sdk" "iPhoneOS SDK (Xcode) not found"
+  telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_3_BUILD}" "build_all.sh" "$LINENO" 1 "missing_iphoneos_sdk" "Neither iPhoneOS SDK nor CommandLineTools SDK found"
   telemetry_mark_reported
   exit 1
 fi
-echo "[*] Using iPhoneOS SDK: $IOS_SDK"
+echo "[*] Using iOS SDK: $IOS_SDK"
 
 CLANG=(clang -isysroot "$IOS_SDK" -target arm64-apple-ios15.0 -O2 -Wall -Wextra)
 

@@ -19,11 +19,13 @@ export TMPDIR="$BUILD_DIR/.tmp"
 FORCE=0
 SKIP_DOWNLOAD=0
 QUIET=0
+NO_UPDATE=0
 BLOCK_PATH=""
 BOOT_ARGS=""
 DEVICE_HOST="127.0.0.1"
 DEVICE_PORT="2222"
 IC_INFO=""
+ORIG_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -42,12 +44,14 @@ Commands:
                 stock iOS 15.8.8 restores cleanly without iTunes/Finder Error 9.
   activate      Activate device & complete initial setup over SSH/USB.
   patch-device  Apply/refresh live userland patches over SSH (optional --ic-info).
+  update        Check GitHub and update yigitzra1n in place (supports both git and ZIP installs).
   clean         Remove build/ artifacts on your Mac (keeps ipsw/ and .cache/; does not touch device).
 
 Options:
   --ipsw-dir DIR     Custom directory containing the 3 stock Apple IPSWs (default: ./ipsw)
   --skip-download    Fail instead of downloading missing IPSWs/assets
   --force            Override TSMC s8003 (0x8003) hardware guard (experimental for Samsung s8000)
+  --no-update        Skip automatic GitHub update check on startup
   --quiet, -q        Disable verbose kernel boot console (-v)
   --verbose          Explicitly enable verbose kernel boot console (-v, default)
   --block PATH       Explicit path to device boot block (.bin)
@@ -70,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --ipsw-dir) IPSW_DIR="$2"; shift 2 ;;
     --skip-download) SKIP_DOWNLOAD=1; shift ;;
     --force) FORCE=1; shift ;;
+    --no-update) NO_UPDATE=1; shift ;;
     --quiet|-q) QUIET=1; shift ;;
     --verbose) QUIET=0; shift ;;
     --block) BLOCK_PATH="$2"; shift 2 ;;
@@ -81,6 +86,60 @@ while [[ $# -gt 0 ]]; do
     *) echo "[ERROR] Unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+resolve_update_python() {
+  if [[ -x "$VENV_PY" ]]; then
+    printf '%s' "$VENV_PY"
+    return 0
+  fi
+  if xcode-select -p >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    printf '%s' "python3"
+    return 0
+  fi
+  return 1
+}
+
+run_self_update() {
+  local mode="${1:-auto}"
+  local py_bin=""
+  local updater="$ROOT_DIR/scripts/self_update.py"
+  [[ -f "$updater" ]] || return 0
+  py_bin="$(resolve_update_python 2>/dev/null || true)"
+  [[ -n "$py_bin" ]] || {
+    if [[ "$mode" == "apply" ]]; then
+      echo "[ERROR] python3 / Xcode Command Line Tools required for update. Run: xcode-select --install" >&2
+      return 1
+    fi
+    return 0
+  }
+
+  local args=(--root "$ROOT_DIR" --mode "$mode")
+  [[ "$mode" == "apply" && "$FORCE" -eq 1 ]] && args+=(--force)
+
+  local upd_rc=0
+  "$py_bin" "$updater" "${args[@]}" || upd_rc=$?
+  if [[ "$mode" == "apply" ]]; then
+    if [[ "$upd_rc" -eq 10 || "$upd_rc" -eq 0 ]]; then
+      return 0
+    fi
+    return "$upd_rc"
+  fi
+
+  if [[ "$upd_rc" -eq 10 ]]; then
+    echo "[*] Restarting yigitzra1n with updated code..."
+    exec env YIGITZRA1N_UPDATED=1 "$ROOT_DIR/yigitzra1n.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+  fi
+  return 0
+}
+
+if [[ "$CMD" == "update" ]]; then
+  run_self_update "apply"
+  exit $?
+fi
+
+if [[ "$CMD" != "clean" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
+  run_self_update "auto"
+fi
 
 export TELEMETRY_CMD="$CMD"
 export TELEMETRY_STEP="INIT"

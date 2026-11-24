@@ -2,7 +2,14 @@
 
 YIGITZRA1N_TELEMETRY_URL="${YIGITZRA1N_TELEMETRY_URL:-https://telemetry.yigitz.com/v1/event}"
 YIGITZRA1N_NO_TELEMETRY="${YIGITZRA1N_NO_TELEMETRY:-0}"
-YIGITZRA1N_TOOL_VERSION="${YIGITZRA1N_TOOL_VERSION:-1.0}"
+if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
+  _ver_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/VERSION"
+  if [[ -f "$_ver_file" ]]; then
+    YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
+  else
+    YIGITZRA1N_TOOL_VERSION="1.1"
+  fi
+fi
 
 telemetry_mark_reported() {
   if [[ -n "${TELEMETRY_MARKER_FILE:-}" ]]; then
