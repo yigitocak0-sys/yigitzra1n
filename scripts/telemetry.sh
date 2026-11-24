@@ -47,8 +47,9 @@ telemetry_send() {
   local exit_code="${6:-0}"
   local reason="${7:-}"
   local error_msg="${8:-}"
+  local silent="${9:-0}"
 
-  if [[ "$event" == "install_fail" || "$event" == "security_block" ]]; then
+  if [[ "$silent" != "1" ]] && [[ "$event" == "install_fail" || "$event" == "security_block" ]]; then
     if [[ "$reason" != "user_aborted" ]]; then
       telemetry_print_contact_note
     fi
@@ -92,7 +93,7 @@ print(json.dumps({
     "line": line_num,
     "exit_code": rc,
     "reason": clean(sys.argv[7], 64),
-    "error_msg": clean(sys.argv[8], 240),
+    "error_msg": clean(sys.argv[8], 1200),
     "host_arch": clean(sys.argv[9], 24),
     "host_os": clean(sys.argv[10], 32),
     "tool_version": clean(sys.argv[11], 32),
@@ -182,7 +183,7 @@ if rc < 0:
     rc = 130 if rc == -2 else (128 - rc)
 with open(err_file, "w", encoding="utf-8") as f:
     if tail_lines:
-        f.write(tail_lines[-1])
+        f.write(" | ".join(tail_lines))
 sys.exit(rc)
 PY
   rc=$?

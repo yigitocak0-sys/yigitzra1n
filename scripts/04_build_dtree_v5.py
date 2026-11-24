@@ -116,7 +116,7 @@ def build_v5(raw15: bytes, raw16: bytes, board: str = "n71map", ramdisk_mode: bo
             else:
                 n15.props[k] = v
 
-    root15.props["target-type"] = (b"J71t\x00", 0)
+    root15.props["target-type"] = (b"J71s\x00" if board == "n71ap" else b"J71t\x00", 0)
 
     for fs_path in ("/device-tree/filesystems/fstab", "/device-tree/filesystems/fstab-ephemeral-diag-data"):
         if fs_path in m15:
@@ -247,7 +247,7 @@ def main() -> None:
     args = ap.parse_args()
 
     dt15_member = f"Firmware/all_flash/DeviceTree.{args.board}.im4p"
-    dt16_member = "Firmware/all_flash/DeviceTree.j71tap.im4p"
+    dt16_member = "Firmware/all_flash/DeviceTree.j71sap.im4p" if args.board == "n71ap" else "Firmware/all_flash/DeviceTree.j71tap.im4p"
 
     print(f"[*] Extracting {dt15_member} and {dt16_member}...")
     raw15 = extract_dt_from_ipsw(Path(args.ipsw_1588), dt15_member)

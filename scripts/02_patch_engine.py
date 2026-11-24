@@ -42,12 +42,41 @@ ARM64_RAMDISK_PATCHES = [
 
 PONGO_ZSTD_SLICE_OFF = 0x101194
 PONGO_ZSTD_SIZE_OFF = 0x11950C
+X86_64_PONGO_ZSTD_SLICE_OFF = 0x112E40
+X86_64_PONGO_ZSTD_SIZE_OFF = 0x12B1B8
 PONGO_LOGO_LOOP_OFF = 0x03F84
 PONGO_LOGO_BITMAP_OFF = 0x2DEA4
 PONGO_LOGO_BITMAP_LEN = 128
 
 X86_64_PATCHES = [
+    (0x0014EA, bytes.fromhex("a9b80d0000"), bytes.fromhex("a900000000"), "Allow -z with -o and --allow-unsupport (x86_64)"),
+    (0x04A93D, bytes.fromhex("6a16"), bytes.fromhex("6a10"), "Always pass boot-args in PongoOS path (x86_64)"),
+    (0x04A97C, bytes.fromhex("8d044083c006"), bytes.fromhex("b81500000090"), "Skip sep_racer/pte in restore chain -> kpf (x86_64)"),
+    (0x04B8A0, bytes.fromhex("8d04851b000000"), bytes.fromhex("8d04451b000000"), "Enable xfb module path (x86_64)"),
+    (0x0E6366, b"cpf", b"xfb", "PongoOS module name cpf -> xfb (x86_64)"),
     (0x0ECA3A, b"s://api.ipsw.me/v4/device/%s", b"://127.0.0.1:8765/device/%s\x00", "Local API endpoint redirect (x86_64)"),
+    (0x0F4B96, b"serial=3\n", b"-v\n\x00\x00\x00\x00\x00\x00", "Verbose boot-args (x86_64)"),
+    (0x0F4DCA, b"cpf", b"xfb", "PongoOS /xfb command (x86_64)"),
+]
+
+X86_64_NANDBOOT_PATCHES = [
+    (0x019A30, bytes.fromhex("554889e54156"), bytes.fromhex("31c0c3909090"), "Skip RestoreRamDisk upload (xor eax,eax; ret) (x86_64)"),
+    (0x04A906, bytes.fromhex("7569"), bytes.fromhex("9090"), "Skip RamDisk branch check (NOP) (x86_64)"),
+    (0x04A93D, bytes.fromhex("6a10"), bytes.fromhex("6a1d"), "Update boot-args length for rd=disk0s1s1 -v (x86_64)"),
+    (0x04B55D, bytes.fromhex("18"), bytes.fromhex("1a"), "NAND boot flag (x86_64)"),
+    (0x0EDCEB, b"-progress", b"wdt=-1 -v", "Disable watchdog + verbose (restore boot-arg #1) (x86_64)"),
+    (0x0EE1A1, b"-progress", b"wdt=-1 -v", "Disable watchdog + verbose (restore boot-arg #2) (x86_64)"),
+    (0x0EE1D2, b"-progress", b"wdt=-1 -v", "Disable watchdog + verbose (boot-arg #3) (x86_64)"),
+    (0x0F4B96, b"-v\n\x00\x00\x00\x00\x00\x00\x00Loaded ", b"rd=disk0s1s1 -v\n\x00", "Default NAND root boot-args (x86_64)"),
+]
+
+X86_64_RAMDISK_PATCHES = [
+    (0x04A906, bytes.fromhex("7569"), bytes.fromhex("9090"), "Skip RamDisk branch check (NOP) (x86_64)"),
+    (0x04A93D, bytes.fromhex("6a10"), bytes.fromhex("6a17"), "Update boot-args length for xargs rd=md0 -v (x86_64)"),
+    (0x0EDCD4, b"nand-enable-reformat=1 -progress -restore", b"wdt=-1 -v" + b"\x00" * 32, "RamDisk boot-args #1 (disable reformat) (x86_64)"),
+    (0x0EE18A, b"nand-enable-reformat=1 -progress -restore", b"wdt=-1 -v" + b"\x00" * 32, "RamDisk boot-args #2 (disable reformat) (x86_64)"),
+    (0x0EE1BB, b"nand-enable-reformat=1 -progress", b"wdt=-1 -v" + b"\x00" * 23, "RamDisk boot-args #3 (disable reformat) (x86_64)"),
+    (0x0F4B89, b"sep xargsadd -v\n\x00\x00\x00\x00\x00\x00\x00Loaded ", b"xargs rd=md0 -v\n" + b"\x00" * 14, "Default RamDisk xargs rd=md0 -v (x86_64)"),
 ]
 
 ZSTD_MODULE_MAP = {
@@ -93,14 +122,20 @@ def apply_slice_patches(buf: bytearray, slice_off: int, patches: list, label: st
             )
         buf[abs_off : abs_off + len(repl)] = repl
 
-def patch_embedded_pongo_logo(buf: bytearray, slice_off: int) -> None:
+def patch_embedded_pongo_logo(
+    buf: bytearray,
+    slice_off: int,
+    zstd_slice_off: int = PONGO_ZSTD_SLICE_OFF,
+    zstd_size_off: int = PONGO_ZSTD_SIZE_OFF,
+    label: str = "arm64",
+) -> None:
     zstd_bin = find_zstd()
-    slot_abs = slice_off + PONGO_ZSTD_SLICE_OFF
-    size_abs = slice_off + PONGO_ZSTD_SIZE_OFF
+    slot_abs = slice_off + zstd_slice_off
+    size_abs = slice_off + zstd_size_off
     orig_comp_len = struct.unpack_from("<I", buf, size_abs)[0]
-    slot_cap = PONGO_ZSTD_SIZE_OFF - PONGO_ZSTD_SLICE_OFF
+    slot_cap = zstd_size_off - zstd_slice_off
     if orig_comp_len == 0 or orig_comp_len > slot_cap:
-        raise RuntimeError(f"Unexpected embedded PongoOS zstd length: {orig_comp_len} (cap={slot_cap})")
+        raise RuntimeError(f"[{label}] Unexpected embedded PongoOS zstd length: {orig_comp_len} (cap={slot_cap})")
 
     proc = subprocess.run(
         [zstd_bin, "-dc", "--no-check"],
@@ -110,12 +145,12 @@ def patch_embedded_pongo_logo(buf: bytearray, slice_off: int) -> None:
     )
     pongo = bytearray(proc.stdout)
     if len(pongo) < PONGO_LOGO_BITMAP_OFF + PONGO_LOGO_BITMAP_LEN:
-        raise RuntimeError(f"Unexpected PongoOS decompressed size: {len(pongo)}")
+        raise RuntimeError(f"[{label}] Unexpected PongoOS decompressed size: {len(pongo)}")
 
     orig_insn = bytes(pongo[PONGO_LOGO_LOOP_OFF : PONGO_LOGO_LOOP_OFF + 4])
     branch_insn = struct.pack("<I", 0x14000015)
     if orig_insn not in (bytes.fromhex("0e008052"), branch_insn):
-        raise RuntimeError(f"Unexpected PongoOS screen_init insn @ 0x{PONGO_LOGO_LOOP_OFF:x}: {orig_insn.hex()}")
+        raise RuntimeError(f"[{label}] Unexpected PongoOS screen_init insn @ 0x{PONGO_LOGO_LOOP_OFF:x}: {orig_insn.hex()}")
     pongo[PONGO_LOGO_LOOP_OFF : PONGO_LOGO_LOOP_OFF + 4] = branch_insn
 
     pongo[PONGO_LOGO_BITMAP_OFF : PONGO_LOGO_BITMAP_OFF + PONGO_LOGO_BITMAP_LEN] = b"\x00" * PONGO_LOGO_BITMAP_LEN
@@ -131,13 +166,13 @@ def patch_embedded_pongo_logo(buf: bytearray, slice_off: int) -> None:
                 comp = cproc.stdout
                 break
     if comp is None:
-        raise RuntimeError(f"Recompressed PongoOS exceeds embedded slot ({slot_cap} B)")
+        raise RuntimeError(f"[{label}] Recompressed PongoOS exceeds embedded slot ({slot_cap} B)")
 
     buf[slot_abs : slot_abs + len(comp)] = comp
     if len(comp) < slot_cap:
         buf[slot_abs + len(comp) : slot_abs + slot_cap] = b"\x00" * (slot_cap - len(comp))
     struct.pack_into("<I", buf, size_abs, len(comp))
-    print(f"  [+] Patched embedded PongoOS logo at source ({orig_comp_len} B -> {len(comp)} B zstd)")
+    print(f"  [+] Patched embedded PongoOS logo ({label}: {orig_comp_len} B -> {len(comp)} B zstd)")
 
 def extract_pongo_modules(arm64_slice: bytes, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,11 +272,14 @@ def main() -> None:
     slices = parse_fat_slices(orig_bytes)
     arm_off, arm_sz = slices["arm64"]
 
+    x86_off = slices["x86_64"][0] if "x86_64" in slices else None
+
     buf_restore = bytearray(orig_bytes)
     apply_slice_patches(buf_restore, arm_off, ARM64_PATCHES, "arm64")
-    if "x86_64" in slices:
-        apply_slice_patches(buf_restore, slices["x86_64"][0], X86_64_PATCHES, "x86_64")
-    patch_embedded_pongo_logo(buf_restore, arm_off)
+    patch_embedded_pongo_logo(buf_restore, arm_off, PONGO_ZSTD_SLICE_OFF, PONGO_ZSTD_SIZE_OFF, "arm64")
+    if x86_off is not None:
+        apply_slice_patches(buf_restore, x86_off, X86_64_PATCHES, "x86_64")
+        patch_embedded_pongo_logo(buf_restore, x86_off, X86_64_PONGO_ZSTD_SLICE_OFF, X86_64_PONGO_ZSTD_SIZE_OFF, "x86_64")
 
     dst_restore = bin_dir / "engine_restore"
     dst_restore.write_bytes(buf_restore)
@@ -251,6 +289,8 @@ def main() -> None:
 
     buf_boot = bytearray(buf_restore)
     apply_slice_patches(buf_boot, arm_off, ARM64_NANDBOOT_PATCHES, "arm64-nandboot")
+    if x86_off is not None:
+        apply_slice_patches(buf_boot, x86_off, X86_64_NANDBOOT_PATCHES, "x86_64-nandboot")
 
     dst_boot = bin_dir / "engine_boot"
     dst_boot.write_bytes(buf_boot)
@@ -260,6 +300,8 @@ def main() -> None:
 
     buf_ramdisk = bytearray(buf_restore)
     apply_slice_patches(buf_ramdisk, arm_off, ARM64_RAMDISK_PATCHES, "arm64-ramdisk")
+    if x86_off is not None:
+        apply_slice_patches(buf_ramdisk, x86_off, X86_64_RAMDISK_PATCHES, "x86_64-ramdisk")
 
     dst_ramdisk = bin_dir / "engine_ramdisk"
     dst_ramdisk.write_bytes(buf_ramdisk)
@@ -271,6 +313,7 @@ def main() -> None:
     extract_pongo_modules(bytes(buf_restore[arm_off : arm_off + arm_sz]), mod_dir)
 
     build_local_api(Path(args.ipsw_1588), Path(args.api_dir))
+    (out_dir / ".patch_rev").write_text("v2_x86_64\n", encoding="utf-8")
     print("[+] Engine & local API setup complete.")
 
 if __name__ == "__main__":

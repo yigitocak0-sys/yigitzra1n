@@ -598,19 +598,41 @@ cmd_prepare() {
   echo "      ./yigitzra1n.sh install"
 }
 
+ensure_patched_engine() {
+  local rev_file="$ENGINE_DIR/.patch_rev"
+  if [[ -f "$rev_file" && "$(tr -d '[:space:]' < "$rev_file" 2>/dev/null || true)" == "v2_x86_64" ]]; then
+    return 0
+  fi
+  local raw_dir="$ROOT_DIR/.cache/engine/raw"
+  local f15=""
+  f15="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_6S_1588_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
+  if [[ -d "$raw_dir" && -n "$f15" ]]; then
+    echo "[*] Updating engine patches (x86_64 + arm64)..."
+    telemetry_run_py "02_patch_engine.py" \
+      --raw-dir "$raw_dir" \
+      --out-dir "$ENGINE_DIR" \
+      --api-dir "$LOCAL_API_DIR" \
+      --ipsw-1588 "$f15"
+  fi
+}
+
 ensure_n71ap_devicetree() {
-  if [[ ! -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" ]]; then
+  local rev_file="$BUILD_DIR/.n71ap_dt_rev"
+  local cur_rev=""
+  [[ -f "$rev_file" ]] && cur_rev="$(tr -d '[:space:]' < "$rev_file" 2>/dev/null || true)"
+  if [[ ! -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" || "$cur_rev" != "j71sap_v5" ]]; then
     local f15 f16
     f15="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_6S_1588_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
     f16="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_IPAD5_16716_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
     if [[ -n "$f15" && -n "$f16" ]]; then
-      echo "[*] Building DeviceTree v5 for Samsung A9 (N71AP)..."
+      echo "[*] Building DeviceTree v5 for Samsung A9 (N71AP / J71sAP)..."
       telemetry_run_py "04_build_dtree_v5.py" \
         --ipsw-1588 "$f15" \
         --ipsw-ipad5 "$f16" \
         --board n71ap \
         --out "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" \
         --out-ramdisk "$BUILD_DIR/DeviceTree.n71ap_ramdisk.im4p"
+      printf 'j71sap_v5\n' > "$rev_file"
     fi
   fi
   if [[ -f "$BUILD_DIR/DeviceTree.n71ap_v5.im4p" ]]; then
@@ -624,6 +646,31 @@ ensure_n71ap_devicetree() {
   fi
 }
 
+collect_engine_failure_detail() {
+  local dev_info=""
+  local irec=""
+  irec="$(command -v irecovery || echo /opt/homebrew/bin/irecovery)"
+  [[ -x "$irec" ]] || irec="/usr/local/bin/irecovery"
+  if [[ -x "$irec" ]]; then
+    dev_info="$("$irec" -q 2>/dev/null | grep -E "^(CPID|BDID|MODE|PWND|SRTG):" | tr '\n' ' ' || true)"
+  fi
+  python3 - "$BUILD_DIR/engine_session.log" "$dev_info" <<'PY' 2>/dev/null || printf '%s' "${dev_info:-engine failed}"
+import pathlib, re, sys
+logp = pathlib.Path(sys.argv[1])
+dev = sys.argv[2].strip()
+tail = []
+if logp.is_file():
+    raw = logp.read_bytes().decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", l).strip() for l in raw.splitlines()]
+    lines = [l for l in lines if l and not l.startswith("Downloading ") and not l.endswith("%")]
+    tail = lines[-14:]
+msg = " | ".join(tail)
+if dev:
+    msg = f"[{dev}] {msg}" if msg else f"[{dev}]"
+print(msg[-1150:])
+PY
+}
+
 cmd_install() {
   TELEMETRY_STEP="INSTALL_PREFLIGHT"
   check_macos_host
@@ -633,6 +680,7 @@ cmd_install() {
     echo "[ERROR] Build outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_patched_engine
   ensure_n71ap_devicetree
   local ipsw_1588
   ipsw_1588="$(find_ipsw "$IPSW_6S_1588_GLOB")"
@@ -701,11 +749,14 @@ cmd_install() {
         fi
       fi
       if [[ -z "$boot_blk" ]]; then
+        local step1_err=""
+        step1_err="$(collect_engine_failure_detail)"
+        telemetry_send "install_fail" "install" "STEP1_SHC" "yigitzra1n.sh" "$LINENO" 1 "shc_capture_attempt_fail" "${step1_err:-SHC boot block capture failed}" 1
         echo "[!] STEP 1/3 did not produce a boot block." >&2
         printf "    Retry STEP 1/3? [Y/n]: "
         read -r retry_ans
         if [[ "${retry_ans:-Y}" =~ ^[Nn]$ ]]; then
-          telemetry_send "install_fail" "install" "STEP1_SHC" "yigitzra1n.sh" "$LINENO" 1 "shc_capture_failed" "SHC boot block capture failed"
+          telemetry_send "install_fail" "install" "STEP1_SHC" "yigitzra1n.sh" "$LINENO" 1 "shc_capture_failed" "${step1_err:-SHC boot block capture failed}"
           telemetry_mark_reported
           exit 1
         fi
@@ -744,11 +795,14 @@ cmd_install() {
           break
         fi
       fi
+      local step2_err=""
+      step2_err="$(collect_engine_failure_detail)"
+      telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_attempt_fail" "${step2_err:-Hybrid NAND restore failed}" 1
       echo "[!] STEP 2/3 (NAND restore) failed." >&2
       printf "    Retry STEP 2/3? [Y/n]: "
       read -r retry_ans
       if [[ "${retry_ans:-Y}" =~ ^[Nn]$ ]]; then
-        telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_failed" "Hybrid NAND restore failed"
+        telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_failed" "${step2_err:-Hybrid NAND restore failed}"
         telemetry_mark_reported
         exit 1
       fi
@@ -779,6 +833,7 @@ cmd_boot() {
     echo "[ERROR] Build outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_patched_engine
   ensure_n71ap_devicetree
   prompt_dfu "Tethered Boot — iOS 16.7.16 (DFU Mode)"
   local py_args=()
@@ -801,6 +856,7 @@ cmd_ssh_ramdisk() {
     echo "[ERROR] SSH RamDisk outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_patched_engine
   ensure_n71ap_devicetree
   prompt_dfu "Maintenance SSH RamDisk Boot (DFU Mode)"
   local py_args=(--ssh-ramdisk)
@@ -825,6 +881,7 @@ cmd_uninstall() {
     echo "[ERROR] SSH RamDisk outputs missing. Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
+  ensure_patched_engine
   ensure_n71ap_devicetree
 
   echo "======================================================================"
