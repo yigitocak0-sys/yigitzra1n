@@ -99,6 +99,23 @@ def check_and_pwn_dfu(force: bool = False) -> None:
         raise RuntimeError(f"Device is not in DFU mode:\n{out.strip()}")
 
     low = out.lower()
+    bdid = ""
+    for line in low.splitlines():
+        if line.startswith("bdid:"):
+            bdid = line.split(":", 1)[1].strip()
+            break
+    if ("cpid: 0x8003" in low or "cpid: 0x8000" in low) and bdid and bdid != "0x04":
+        if bdid == "0x06":
+            raise RuntimeError(
+                "iPhone 6s Plus (BDID 0x06 / N66AP-N66mAP) is NOT supported yet; this build only targets 4.7-inch iPhone 6s (BDID 0x04)."
+            )
+        if bdid == "0x02":
+            raise RuntimeError(
+                "iPhone SE (1st gen / BDID 0x02) is NOT supported; this build only targets 4.7-inch iPhone 6s (BDID 0x04)."
+            )
+        raise RuntimeError(
+            f"Unsupported A9 board BDID {bdid}; expected iPhone 6s (BDID 0x04)."
+        )
     if "cpid: 0x8000" in low and not force:
         raise RuntimeError(
             "Samsung A9 (CPID 0x8000 / N71AP) detected. This port targets TSMC A9 (0x8003 / N71mAP) by default; pass --force to override."

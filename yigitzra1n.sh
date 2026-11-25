@@ -239,7 +239,7 @@ state_label() {
 
 get_irec_mode() {
   local irec
-  irec="$(command -v irecovery || echo /opt/homebrew/bin/irecovery)"
+  irec="$(find_irecovery_bin)"
   python3 - "$irec" <<'PY' 2>/dev/null || true
 import subprocess, sys
 try:
@@ -299,7 +299,7 @@ try_confirm_dfu() {
 prompt_dfu() {
   local step_title="$1"
   local irec
-  irec="$(command -v irecovery || echo /opt/homebrew/bin/irecovery)"
+  irec="$(find_irecovery_bin)"
 
   while true; do
     echo ""
@@ -532,6 +532,7 @@ cmd_prepare() {
   check_cli_tools
   ensure_python_venv
   check_disk_space 30
+  check_connected_device_early "$FORCE"
 
   TELEMETRY_STEP="PREPARE_2_ASSETS"
   echo ">>> [yigitzra1n 2/7] Fetching / verifying 3 stock Apple IPSWs & open-source tools..."

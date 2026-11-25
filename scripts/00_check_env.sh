@@ -4,6 +4,29 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 
+for _p in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "$_p" && ":$PATH:" != *":$_p:"* ]]; then
+    export PATH="$_p:$PATH"
+  fi
+done
+unset _p
+
+find_irecovery_bin() {
+  local cand
+  cand="$(command -v irecovery 2>/dev/null || true)"
+  if [[ -n "$cand" && -x "$cand" ]]; then
+    printf '%s' "$cand"
+    return 0
+  fi
+  for cand in /opt/homebrew/bin/irecovery /usr/local/bin/irecovery; do
+    if [[ -x "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  printf '%s' "/opt/homebrew/bin/irecovery"
+}
+
 check_macos_host() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "[ERROR] This toolchain requires macOS (uses hdiutil, asr, codesign, clang)." >&2
@@ -83,7 +106,7 @@ check_disk_space() {
 check_device_cpid() {
   local force="${1:-0}"
   local irec
-  irec="$(command -v irecovery || echo /opt/homebrew/bin/irecovery)"
+  irec="$(find_irecovery_bin)"
   local info=""
   local attempt
   for attempt in 1 2 3 4 5; do
@@ -98,22 +121,66 @@ check_device_cpid() {
     return 1
   fi
 
-  local cpid mode pwnd ecid
+  local cpid bdid mode pwnd ecid
   cpid="$(printf '%s\n' "$info" | awk -F': ' '/^CPID:/ {print tolower($2)}' | tr -d '\r')"
+  bdid="$(printf '%s\n' "$info" | awk -F': ' '/^BDID:/ {print tolower($2)}' | tr -d '\r')"
   mode="$(printf '%s\n' "$info" | awk -F': ' '/^MODE:/ {print $2}' | tr -d '\r')"
   pwnd="$(printf '%s\n' "$info" | awk -F': ' '/^PWND:/ {print $2}' | tr -d '\r')"
   ecid="$(printf '%s\n' "$info" | awk -F': ' '/^ECID:/ {print $2}' | tr -d '\r')"
 
-  echo "[*] Detected device: MODE=${mode:-unknown} CPID=${cpid:-unknown} PWND=${pwnd:-none}"
+  echo "[*] Detected device: MODE=${mode:-unknown} CPID=${cpid:-unknown} BDID=${bdid:-unknown} PWND=${pwnd:-none}"
+
+  if [[ "$cpid" == "0x8003" || "$cpid" == "0x8000" ]]; then
+    if [[ -n "$bdid" && "$bdid" != "0x04" ]]; then
+      case "$bdid" in
+        0x06)
+          echo "[STOP] iPhone 6s Plus (CPID $cpid / BDID 0x06 / N66AP-N66mAP) detected — NOT supported yet!" >&2
+          echo "       This release only supports the 4.7-inch iPhone 6s (BDID 0x04 / N71AP-N71mAP)." >&2
+          echo "       Restoring N71 images onto a 6s Plus fails BuildManifest/panel/touch compatibility." >&2
+          if declare -F telemetry_send >/dev/null 2>&1; then
+            telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-BDID_CHECK}" "00_check_env.sh" "$LINENO" 2 "bdid_0x06_6s_plus_blocked" "iPhone 6s Plus (BDID 0x06 / $cpid) blocked"
+            telemetry_mark_reported
+          fi
+          return 2
+          ;;
+        0x02)
+          echo "[STOP] iPhone SE (1st gen / CPID $cpid / BDID 0x02 / N69AP-N69uAP) detected — NOT supported!" >&2
+          echo "       This release only supports the 4.7-inch iPhone 6s (BDID 0x04)." >&2
+          if declare -F telemetry_send >/dev/null 2>&1; then
+            telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-BDID_CHECK}" "00_check_env.sh" "$LINENO" 2 "bdid_0x02_se1_blocked" "iPhone SE 1st gen (BDID 0x02 / $cpid) blocked"
+            telemetry_mark_reported
+          fi
+          return 2
+          ;;
+        0x10|0x12)
+          echo "[STOP] iPad 5th gen (CPID $cpid / BDID $bdid) detected — NOT supported!" >&2
+          echo "       This release targets the iPhone 6s (BDID 0x04), not the donor iPad." >&2
+          if declare -F telemetry_send >/dev/null 2>&1; then
+            telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-BDID_CHECK}" "00_check_env.sh" "$LINENO" 2 "bdid_ipad5_blocked" "iPad 5th gen (BDID $bdid / $cpid) blocked"
+            telemetry_mark_reported
+          fi
+          return 2
+          ;;
+        *)
+          echo "[STOP] Unsupported A9 board BDID: $bdid (CPID $cpid). Expected iPhone 6s (BDID 0x04)." >&2
+          if declare -F telemetry_send >/dev/null 2>&1; then
+            telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-BDID_CHECK}" "00_check_env.sh" "$LINENO" 2 "bdid_unsupported_blocked" "Unsupported A9 BDID $bdid ($cpid)"
+            telemetry_mark_reported
+          fi
+          return 2
+          ;;
+      esac
+    fi
+  fi
 
   if [[ "$cpid" == "0x8003" ]]; then
     export YIGITZRA1N_DEVICE_SOC="tsmc_0x8003"
-    echo "[+] Confirmed TSMC A9 (iPhone 6s N71mAP / s8003)."
+    echo "[+] Confirmed TSMC A9 (iPhone 6s N71mAP / s8003, BDID ${bdid:-0x04})."
     return 0
   elif [[ "$cpid" == "0x8000" ]]; then
     if [[ "$force" == "1" ]]; then
       export YIGITZRA1N_DEVICE_SOC="samsung_0x8000_forced"
-      echo "[WARN] Samsung A9 (CPID 0x8000 / N71AP) detected — proceeding because --force was passed." >&2
+      echo "[WARN] Samsung A9 (CPID 0x8000 / N71AP, BDID ${bdid:-0x04}) detected — proceeding because --force was passed." >&2
       echo "       Note: Kernel/DeviceTree patches were verified on TSMC s8003 (N71mAP); Samsung N71AP is experimental." >&2
       return 0
     else
@@ -138,6 +205,83 @@ check_device_cpid() {
       telemetry_mark_reported
     fi
     return 2
+  fi
+}
+
+check_connected_device_early() {
+  local force="${1:-0}"
+  local irec
+  irec="$(find_irecovery_bin)"
+
+  if [[ -x "$irec" ]]; then
+    local qout=""
+    qout="$(python3 - "$irec" <<'PY' 2>/dev/null || true
+import subprocess, sys
+try:
+    r = subprocess.run([sys.argv[1], "-q"], capture_output=True, text=True, timeout=1.5)
+    if "CPID:" in r.stdout:
+        print(r.stdout.strip())
+except Exception:
+    pass
+PY
+)"
+    if [[ -n "$qout" ]]; then
+      local cpid_rc=0
+      check_device_cpid "$force" || cpid_rc=$?
+      if [[ "$cpid_rc" -eq 2 ]]; then
+        exit 1
+      fi
+      return 0
+    fi
+  fi
+
+  command -v idevice_id >/dev/null 2>&1 || return 0
+  command -v ideviceinfo >/dev/null 2>&1 || return 0
+
+  local udid=""
+  udid="$(idevice_id -l 2>/dev/null | grep -v -E 'SSHRD|^ffffffff' | head -n 1 | tr -d '\r' || true)"
+  [[ -n "$udid" ]] || return 0
+
+  local dev_meta=""
+  dev_meta="$(python3 - "$udid" <<'PY' 2>/dev/null || true
+import subprocess, sys
+def prop(key):
+    r = subprocess.run(["ideviceinfo", "-u", sys.argv[1], "-k", key], capture_output=True, text=True, timeout=2.0)
+    return r.stdout.strip() if r.returncode == 0 else ""
+pt = prop("ProductType")
+hw = prop("HardwareModel")
+if pt or hw:
+    print(f"{pt}|{hw}")
+PY
+)"
+  [[ -n "$dev_meta" ]] || return 0
+
+  local ptype="${dev_meta%%|*}"
+  local hw="${dev_meta#*|}"
+  [[ -n "$ptype" ]] || return 0
+
+  echo "[*] Connected USB iOS device detected: ProductType=$ptype HardwareModel=${hw:-unknown}"
+
+  if [[ "$ptype" == "iPhone8,2" ]]; then
+    echo "[STOP] iPhone 6s Plus ($ptype / ${hw:-N66*}) detected — NOT supported yet!" >&2
+    echo "       This release only supports the 4.7-inch iPhone 6s (iPhone8,1 / N71mAP-N71AP)." >&2
+    echo "       Stopping before downloading ~30 GB of IPSWs." >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-PREPARE_1_ENV}" "00_check_env.sh" "$LINENO" 2 "product_6s_plus_blocked" "iPhone 6s Plus ($ptype / $hw) blocked in prepare"
+      telemetry_mark_reported
+    fi
+    exit 1
+  elif [[ "$ptype" != "iPhone8,1" ]]; then
+    echo "[STOP] Connected device ($ptype / ${hw:-unknown}) is not an iPhone 6s (iPhone8,1)." >&2
+    echo "       Stopping before downloading ~30 GB of IPSWs." >&2
+    if declare -F telemetry_send >/dev/null 2>&1; then
+      telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-PREPARE_1_ENV}" "00_check_env.sh" "$LINENO" 2 "product_unsupported_blocked" "Unsupported $ptype ($hw) blocked in prepare"
+      telemetry_mark_reported
+    fi
+    exit 1
+  elif [[ ( "$hw" == "N71AP" || "$hw" == "n71ap" ) && "$force" != "1" ]]; then
+    echo "[WARN] Connected iPhone 6s is Samsung A9 (N71AP / CPID 0x8000)." >&2
+    echo "       Preparation will continue, but you will need --force during install and boot." >&2
   fi
 }
 
