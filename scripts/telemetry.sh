@@ -9,7 +9,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.13"
+    YIGITZRA1N_TOOL_VERSION="1.14"
   fi
 fi
 
@@ -311,12 +311,14 @@ PY
 
   local resp_file=""
   resp_file="$(mktemp "${TMPDIR:-/tmp}/.yigitz_msg.XXXXXX")"
-  local http_code="000"
+  local http_code=""
   http_code="$(curl -sS --connect-timeout 5 --max-time 12 \
     -o "$resp_file" -w "%{http_code}" \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    "$YIGITZRA1N_MESSAGE_URL" 2>/dev/null || printf '000')"
+    "$YIGITZRA1N_MESSAGE_URL" 2>/dev/null || true)"
+  http_code="${http_code:0:3}"
+  [[ -n "$http_code" ]] || http_code="000"
 
   local resp_body=""
   resp_body="$(cat "$resp_file" 2>/dev/null || true)"
@@ -376,12 +378,14 @@ PY
 
   local resp_file=""
   resp_file="$(mktemp "${TMPDIR:-/tmp}/.yigitz_msgs.XXXXXX")"
-  local http_code="000"
+  local http_code=""
   http_code="$(curl -sS --connect-timeout 5 --max-time 12 \
     -o "$resp_file" -w "%{http_code}" \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    "$YIGITZRA1N_MESSAGES_URL" 2>/dev/null || printf '000')"
+    "$YIGITZRA1N_MESSAGES_URL" 2>/dev/null || true)"
+  http_code="${http_code:0:3}"
+  [[ -n "$http_code" ]] || http_code="000"
 
   local resp_body=""
   resp_body="$(cat "$resp_file" 2>/dev/null || true)"
