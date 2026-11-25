@@ -1,4 +1,26 @@
 #!/usr/bin/env bash
+#
+# Anonymous step/crash telemetry and optional CLI messaging for yigitzra1n.
+# Used strictly to pinpoint broken restore/boot/network steps in real-world runs
+# (e.g., Samsung A9 support, x86 Mac fixes, and download/network fallbacks).
+#
+# What is sent (telemetry_send):
+#   - event, command, step, source_file, line, exit_code, sanitized reason/error_msg
+#   - host_os (sw_vers), host_arch (uname -m), tool_version
+#   - client_id: derived locally via PBKDF2-HMAC-SHA256 (200,000 rounds, static salt)
+#     from IOPlatformSerialNumber/UUID and truncated to 64 bits (16 hex chars).
+#     Raw hardware identifiers never leave the Mac; this one-way tag only groups
+#     retries from the same machine and routes replies for `./yigitzra1n.sh message`.
+#
+# Privacy & redaction:
+#   - Paths (/Users/..., /home/...), serial numbers, UDIDs, ECIDs, and IMEIs are
+#     regex-redacted both client-side (clean()) and server-side before storage.
+#   - The telemetry backend stores zero IP addresses or HTTP access logs in SQLite
+#     (IPs are only ephemerally salted+hashed in RAM for rate limiting).
+#   - All event uploads use a 2s timeout and fail silently without blocking the tool.
+#
+# Opt-out completely:
+#   YIGITZRA1N_NO_TELEMETRY=1 ./yigitzra1n.sh <command>
 
 YIGITZRA1N_TELEMETRY_URL="${YIGITZRA1N_TELEMETRY_URL:-https://telemetry.yigitz.com/v1/event}"
 YIGITZRA1N_MESSAGE_URL="${YIGITZRA1N_MESSAGE_URL:-https://telemetry.yigitz.com/v1/message}"
