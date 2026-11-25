@@ -116,7 +116,12 @@ FETCH_STEP="FETCH_PROCURSUS"
 VENV_PY="$ROOT_DIR/.venv/bin/python3"
 [[ -x "$VENV_PY" ]] || VENV_PY="python3"
 if [[ "$SKIP_DOWNLOAD" -eq 0 ]]; then
-  "$VENV_PY" "$ROOT_DIR/scripts/resolve_procursus_debs.py" \
+  mkdir -p "$ROOT_DIR/build/.tmp"
+  export ROOT_DIR VENV_PY
+  export TELEMETRY_CMD="${TELEMETRY_CMD:-prepare}"
+  export TELEMETRY_STEP="$FETCH_STEP"
+  export TELEMETRY_MARKER_FILE="${TELEMETRY_MARKER_FILE:-$ROOT_DIR/build/.tmp/.telemetry_reported}"
+  telemetry_run_py "resolve_procursus_debs.py" \
     --cache-dir "$PROCURSUS_DIR" \
     --packages openssh-server openssh-sftp-server openssh-client bash coreutils gzip zstd tar findutils grep sed curl nano lsof less
 else

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import lzma
 import os
 import re
+import shutil
+import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -38,7 +42,47 @@ def sha256_file(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def download_if_needed(url: str, dest: Path, expected_sha256: str = "") -> Path:
+def _download_with_curl(url: str, part: Path) -> None:
+    curl_bin = shutil.which("curl")
+    if not curl_bin:
+        raise FileNotFoundError("curl not found")
+    cmd = [
+        curl_bin,
+        "-fsSL",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "180",
+        "-A",
+        "procursus-bootstrap-helper/1.0",
+        "-o",
+        str(part),
+        url,
+    ]
+    if part.exists() and part.stat().st_size > 0:
+        cmd.extend(["-C", "-"])
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 33 and part.exists():
+        part.unlink(missing_ok=True)
+        cmd_no_resume = [x for i, x in enumerate(cmd) if not (x == "-C" or (i > 0 and cmd[i - 1] == "-C"))]
+        res = subprocess.run(cmd_no_resume, capture_output=True, text=True)
+    if res.returncode != 0 or not part.is_file() or part.stat().st_size == 0:
+        err = (res.stderr or res.stdout or "").strip().splitlines()
+        detail = err[-1] if err else f"curl exit {res.returncode} (empty/missing file)"
+        raise RuntimeError(f"curl failed ({res.returncode}) for {os.path.basename(url)}: {detail}")
+
+
+def _download_with_urllib(url: str, part: Path) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "procursus-bootstrap-helper/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp, part.open("wb") as out:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            out.write(chunk)
+
+
+def download_if_needed(url: str, dest: Path, expected_sha256: str = "", max_attempts: int = 3) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and expected_sha256:
         if sha256_file(dest) == expected_sha256:
@@ -48,20 +92,36 @@ def download_if_needed(url: str, dest: Path, expected_sha256: str = "") -> Path:
         return dest
 
     tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(url, headers={"User-Agent": "procursus-bootstrap-helper/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as resp, tmp.open("wb") as out:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            out.write(chunk)
-    if expected_sha256:
-        got = sha256_file(tmp)
-        if got != expected_sha256:
-            tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"SHA256 uyuşmazlığı ({dest.name}): beklenen={expected_sha256}, gelen={got}")
-    tmp.replace(dest)
-    return dest
+    has_curl = shutil.which("curl") is not None
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if has_curl:
+                _download_with_curl(url, tmp)
+            else:
+                _download_with_urllib(url, tmp)
+
+            if expected_sha256:
+                got = sha256_file(tmp)
+                if got != expected_sha256:
+                    tmp.unlink(missing_ok=True)
+                    raise RuntimeError(f"SHA256 mismatch ({dest.name}): expected={expected_sha256}, got={got}")
+            tmp.replace(dest)
+            return dest
+        except Exception as exc:
+            last_err = exc
+            if not has_curl or "SHA256 mismatch" in str(exc):
+                tmp.unlink(missing_ok=True)
+            if attempt < max_attempts:
+                print(
+                    f"[!] {dest.name} download failed (attempt {attempt}/{max_attempts}): {exc}",
+                    file=sys.stderr,
+                )
+                time.sleep(2 * attempt)
+            else:
+                tmp.unlink(missing_ok=True)
+
+    raise RuntimeError(f"Failed to download {dest.name} after {max_attempts} attempts: {last_err}")
 
 def _ver_key(ver: str):
     return [int(x) if x.isdigit() else x for x in re.split(r"([0-9]+)", ver)]
@@ -93,11 +153,30 @@ def parse_packages(raw_text: str):
     return db, provides_map
 
 def parse_installed_from_bootstrap(bootstrap_tar_zst: Path) -> set:
-    import subprocess
-    cmd = ["sh", "-c", f'zstd -dc "{bootstrap_tar_zst}" | tar -xOf - ./var/jb/Library/dpkg/status']
-    out = subprocess.check_output(cmd, text=True, errors="replace")
+    zstd_bin = shutil.which("zstd")
+    if not zstd_bin:
+        for cand in ("/opt/homebrew/bin/zstd", "/usr/local/bin/zstd"):
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                zstd_bin = cand
+                break
+    if not zstd_bin:
+        raise RuntimeError("zstd binary not found in PATH")
+    zstd_proc = subprocess.Popen([zstd_bin, "-dc", str(bootstrap_tar_zst)], stdout=subprocess.PIPE)
+    assert zstd_proc.stdout is not None
+    tar_proc = subprocess.run(
+        ["tar", "-xOf", "-", "./var/jb/Library/dpkg/status"],
+        stdin=zstd_proc.stdout,
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    zstd_proc.stdout.close()
+    zstd_rc = zstd_proc.wait()
+    if zstd_rc != 0 or tar_proc.returncode != 0:
+        err_msg = (tar_proc.stderr or "").strip() or f"zstd rc={zstd_rc}, tar rc={tar_proc.returncode}"
+        raise RuntimeError(f"Failed to read dpkg status from {bootstrap_tar_zst.name}: {err_msg}")
     installed = set()
-    for line in out.splitlines():
+    for line in tar_proc.stdout.splitlines():
         if line.startswith("Package:"):
             installed.add(line.split(":", 1)[1].strip())
     return installed
@@ -145,11 +224,19 @@ def main():
     download_if_needed(BOOTSTRAP_URL, bs_path, BOOTSTRAP_SHA256)
 
     pkg_xz = cache / "Packages.xz"
-    print(f"[*] Paket indeksi indiriliyor: {PACKAGES_XZ_URL}")
-    download_if_needed(PACKAGES_XZ_URL, pkg_xz)
+    raw_packages = ""
+    for pkg_attempt in range(1, 3):
+        print(f"[*] Paket indeksi indiriliyor: {PACKAGES_XZ_URL}")
+        download_if_needed(PACKAGES_XZ_URL, pkg_xz)
+        try:
+            raw_packages = lzma.decompress(pkg_xz.read_bytes()).decode("utf-8", errors="replace")
+            break
+        except (lzma.LZMAError, EOFError, OSError) as exc:
+            pkg_xz.unlink(missing_ok=True)
+            if pkg_attempt == 2:
+                raise RuntimeError(f"Packages.xz decompression failed: {exc}") from exc
+            print(f"[!] Cached Packages.xz corrupt ({exc}); re-downloading...", file=sys.stderr)
 
-    import lzma
-    raw_packages = lzma.decompress(pkg_xz.read_bytes()).decode("utf-8", errors="replace")
     db, provides_map = parse_packages(raw_packages)
     installed = parse_installed_from_bootstrap(bs_path)
     order = resolve_tree(args.packages, db, provides_map, installed)

@@ -7,7 +7,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.10"
+    YIGITZRA1N_TOOL_VERSION="1.11"
   fi
 fi
 
