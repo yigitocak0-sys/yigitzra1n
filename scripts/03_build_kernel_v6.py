@@ -68,6 +68,12 @@ LATE_KERNEL_PATCHES = [
         "01008052",
         "AppleFirmwareUpdateKext::sendFirmware AOP skipFWValidation=1 status=0 (v6)",
     ),
+    (
+        0x19D6F04,
+        "a0030054",
+        "1d000014",
+        "AppleSEPManager sleep power-gate bypass (skip 5s SEP timeout panic)",
+    ),
 ]
 
 MULTITOUCH_N71_XML = (
@@ -263,7 +269,7 @@ def main() -> None:
             check=True,
         )
 
-        print("[5/6] Applying AppleARMPMU Site1/2/3 (charge icon + NULL guard) and AOP v6 patch...")
+        print("[5/6] Applying AppleARMPMU Site1/2/3, AOP v6, and AppleSEPManager sleep power-gate bypass...")
         final_buf = bytearray(kc_cs42.read_bytes())
         apply_patches(final_buf, LATE_KERNEL_PATCHES)
 
