@@ -857,7 +857,7 @@ cmd_boot() {
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
   [[ -n "$BOOT_ARGS" ]] && py_args+=(--boot-args "$BOOT_ARGS")
   [[ "$QUIET" -eq 1 ]] && py_args+=(--quiet)
-  [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
+  [[ "$FORCE" -eq 1 || "${YIGITZRA1N_S8000_CONFIRMED:-0}" == "1" ]] && py_args+=(--force)
   telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
   if [[ "$TELEMETRY_CMD" == "boot" ]]; then
     telemetry_send "install_success" "boot" "BOOT_DONE" "yigitzra1n.sh" "$LINENO" 0 "booted" ""
@@ -878,7 +878,7 @@ cmd_ssh_ramdisk() {
   prompt_dfu "Maintenance SSH RamDisk Boot (DFU Mode)"
   local py_args=(--ssh-ramdisk)
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
-  [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
+  [[ "$FORCE" -eq 1 || "${YIGITZRA1N_S8000_CONFIRMED:-0}" == "1" ]] && py_args+=(--force)
   telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
 
   echo ""
@@ -945,7 +945,7 @@ cmd_uninstall() {
   prompt_dfu "Uninstall / Reset APFS — Maintenance SSH RamDisk (DFU Mode)"
   local py_args=(--ssh-ramdisk)
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
-  [[ "$FORCE" -eq 1 ]] && py_args+=(--force)
+  [[ "$FORCE" -eq 1 || "${YIGITZRA1N_S8000_CONFIRMED:-0}" == "1" ]] && py_args+=(--force)
   telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
 
   local iproxy_pid=""

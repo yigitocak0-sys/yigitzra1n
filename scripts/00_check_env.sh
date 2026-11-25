@@ -259,17 +259,39 @@ check_device_cpid() {
     echo "[+] Confirmed TSMC A9 (iPhone 6s N71mAP / s8003, BDID ${bdid:-0x04})."
     return 0
   elif [[ "$cpid" == "0x8000" ]]; then
-    if [[ "$force" == "1" ]]; then
+    if [[ "$force" == "1" || "${YIGITZRA1N_S8000_CONFIRMED:-0}" == "1" ]]; then
       export YIGITZRA1N_DEVICE_SOC="samsung_0x8000_forced"
-      echo "[WARN] Samsung A9 (CPID 0x8000 / N71AP, BDID ${bdid:-0x04}) detected — proceeding because --force was passed." >&2
-      echo "       Note: Kernel/DeviceTree patches were verified on TSMC s8003 (N71mAP); Samsung N71AP is experimental." >&2
+      if [[ "${YIGITZRA1N_S8000_CONFIRMED:-0}" != "1" ]]; then
+        echo "[WARN] Samsung A9 (CPID 0x8000 / N71AP, BDID ${bdid:-0x04}) detected — proceeding because --force was passed." >&2
+        echo "       Note: Kernel/DeviceTree patches were verified on TSMC s8003 (N71mAP); Samsung N71AP is experimental." >&2
+      fi
       return 0
-    else
-      echo "[STOP] Samsung A9 (CPID 0x8000 / N71AP) detected!" >&2
-      echo "       This port is verified on TSMC A9 (CPID 0x8003 / N71mAP) by default." >&2
-      echo "       If you explicitly want to experiment on Samsung N71AP, re-run with --force." >&2
+    elif [[ -t 0 ]]; then
+      echo "" >&2
+      echo "======================================================================" >&2
+      echo "  NOTE!!! Your phone is using an A9 chip from Samsung (CPID 0x8000 / N71AP)." >&2
+      echo "  Samsung A9 support is EXPERIMENTAL (primary verified target: TSMC s8003)." >&2
+      echo "======================================================================" >&2
+      printf "  Are you sure you want to continue? [y/N]: " >&2
+      local s8000_ans=""
+      IFS= read -r s8000_ans || true
+      if [[ "${s8000_ans:-N}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        export YIGITZRA1N_DEVICE_SOC="samsung_0x8000_forced"
+        export YIGITZRA1N_S8000_CONFIRMED=1
+        echo "[+] Continuing on experimental Samsung A9 (CPID 0x8000 / N71AP)." >&2
+        return 0
+      fi
+      echo "[*] Aborted by user (Samsung A9 confirmation declined)." >&2
       if declare -F telemetry_send >/dev/null 2>&1; then
-        telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-CPID_CHECK}" "00_check_env.sh" "$LINENO" 2 "cpid_0x8000_blocked" "Samsung A9 CPID 0x8000 blocked"
+        telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-CPID_CHECK}" "00_check_env.sh" "$LINENO" 2 "cpid_0x8000_declined" "User declined experimental Samsung A9 prompt"
+        telemetry_mark_reported
+      fi
+      return 2
+    else
+      echo "[STOP] Samsung A9 (CPID 0x8000 / N71AP) detected (non-interactive shell)." >&2
+      echo "       Re-run interactively to confirm, or pass --force." >&2
+      if declare -F telemetry_send >/dev/null 2>&1; then
+        telemetry_send "security_block" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-CPID_CHECK}" "00_check_env.sh" "$LINENO" 2 "cpid_0x8000_blocked" "Samsung A9 CPID 0x8000 blocked (non-interactive)"
         telemetry_mark_reported
       fi
       return 2
@@ -361,8 +383,8 @@ PY
     fi
     exit 1
   elif [[ ( "$hw" == "N71AP" || "$hw" == "n71ap" ) && "$force" != "1" ]]; then
-    echo "[WARN] Connected iPhone 6s is Samsung A9 (N71AP / CPID 0x8000)." >&2
-    echo "       Preparation will continue, but you will need --force during install and boot." >&2
+    echo "[WARN] NOTE!!! Connected iPhone 6s uses a Samsung A9 chip (N71AP / CPID 0x8000)." >&2
+    echo "       Samsung A9 support is EXPERIMENTAL. Preparation will continue; you will be asked to confirm before install/boot (or pass --force)." >&2
   fi
 }
 

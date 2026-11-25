@@ -116,10 +116,20 @@ def check_and_pwn_dfu(force: bool = False) -> None:
         raise RuntimeError(
             f"Unsupported A9 board BDID {bdid}; expected iPhone 6s (BDID 0x04)."
         )
-    if "cpid: 0x8000" in low and not force:
-        raise RuntimeError(
-            "Samsung A9 (CPID 0x8000 / N71AP) detected. This port targets TSMC A9 (0x8003 / N71mAP) by default; pass --force to override."
-        )
+    if "cpid: 0x8000" in low and not force and os.environ.get("YIGITZRA1N_S8000_CONFIRMED") != "1":
+        if sys.stdin.isatty():
+            print("\n======================================================================", flush=True)
+            print("  NOTE!!! Your phone is using an A9 chip from Samsung (CPID 0x8000 / N71AP).", flush=True)
+            print("  Samsung A9 support is EXPERIMENTAL (primary verified target: TSMC s8003).", flush=True)
+            print("======================================================================", flush=True)
+            ans = input("  Are you sure you want to continue? [y/N]: ").strip()
+            if ans.lower() not in ("y", "yes"):
+                raise RuntimeError("Aborted by user (Samsung A9 confirmation declined).")
+            print("[+] Continuing on experimental Samsung A9 (CPID 0x8000 / N71AP).", flush=True)
+        else:
+            raise RuntimeError(
+                "Samsung A9 (CPID 0x8000 / N71AP) detected (non-interactive shell); re-run interactively to confirm or pass --force."
+            )
     if "pwnd: yolo" in low:
         print("[*] Device is already in pwnDFU mode.", flush=True)
         return
