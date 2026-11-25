@@ -248,14 +248,14 @@ Bu komut Bakım SSH RamDisk'ini başlatır, yalnızca APFS konteynerini (`/dev/d
 
 To help diagnose build/install failures and track security guard triggers, `yigitzra1n` sends a minimal, anonymous event via [`scripts/telemetry.sh`](scripts/telemetry.sh) on first launch (recorded locally in `.yigitzra1n_init` so it only fires once) and when a command succeeds, fails, or hits a hardware/safety guard:
 
-- **What IS collected:** Event outcome (`first_run`, `install_success`, `install_fail`, `security_block`), subcommand & step name, failing script filename & line number, exit code, sanitized error summary, macOS version (`sw_vers`), CPU architecture (`arm64` / `x86_64`), and tool version.
-- **What is NEVER collected:** No ECID, UDID, serial number, IP address, Apple ID, or Mac username (`/Users/<name>` paths and long numeric IDs are stripped client-side before sending, and the server does not log IP addresses).
+- **What IS collected:** An irreversible 16-hex-char client hash (`client_id`, derived locally via 200,000-round `PBKDF2-HMAC-SHA256` from `IOPlatformSerialNumber` and truncated to 64 bits), event outcome (`first_run`, `install_success`, `install_fail`, `security_block`), subcommand & step name, failing script filename & line number, exit code, sanitized error summary, macOS version (`sw_vers`), CPU architecture (`arm64` / `x86_64`), and tool version.
+- **What is NEVER collected:** No raw Mac serial number (hashed one-way locally and discarded immediately — never leaves your Mac), no iPhone ECID, UDID, or serial number, no IP address, Apple ID, or Mac username (`/Users/<name>` paths and long numeric IDs are stripped client-side before sending, and the server does not log IP addresses).
 - **Opt-out:** Set `YIGITZRA1N_NO_TELEMETRY=1` before any command to completely disable telemetry:
   ```bash
   YIGITZRA1N_NO_TELEMETRY=1 ./yigitzra1n.sh prepare
   ```
 
-*(Türkçe Özet)*: Kurulum/derleme hatalarını ve güvenlik engeli tetiklenmelerini tespit edebilmek için yalnızca **başarı/hata sonucu, aşama, hata veren dosya/satır numarası, çıkış kodu ve macOS sürüm/mimari bilgisi** anonim olarak gönderilir. **ECID, UDID, seri numarası, IP adresi veya kullanıcı adınız kesinlikle toplanmaz.** İstemezseniz `YIGITZRA1N_NO_TELEMETRY=1` ile tamamen kapatabilirsiniz.
+*(Türkçe Özet)*: Kurulum/derleme hatalarını tespit edip aynı Mac'ten gelen denemeleri gruplayabilmek için yerel olarak **200.000 tur `PBKDF2-HMAC-SHA256` + 64-bit kırpma ile üretilen geri döndürülemez `client_id` özeti**, **başarı/hata sonucu, aşama, hata veren dosya/satır numarası, çıkış kodu ve macOS sürüm/mimari bilgisi** anonim olarak gönderilir. **Ham Mac seri numaranız (yerelde tek yönlü özetlenip atılır), iPhone ECID/UDID/seri numaranız, IP adresiniz veya kullanıcı adınız kesinlikle toplanmaz.** İstemezseniz `YIGITZRA1N_NO_TELEMETRY=1` ile tamamen kapatabilirsiniz.
 
 ---
 

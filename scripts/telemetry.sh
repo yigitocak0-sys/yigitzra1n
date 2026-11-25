@@ -7,7 +7,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.1"
+    YIGITZRA1N_TOOL_VERSION="1.10"
   fi
 fi
 
@@ -68,7 +68,38 @@ telemetry_send() {
 
   local payload=""
   payload="$(python3 - "$event" "$command_name" "$step" "$source_file" "$line" "$exit_code" "$reason" "$error_msg" "$host_arch" "$host_os" "$tool_ver" <<'PY' 2>/dev/null || true
-import json, re, sys
+import hashlib, json, re, subprocess, sys
+
+DOMAIN_SALT = b"yigitzra1n:one-way-anon-client:v1"
+PBKDF2_ROUNDS = 200_000
+TRUNC_HEX_LEN = 16
+
+def derive_irreversible_client_id() -> str:
+    try:
+        out = subprocess.check_output(
+            ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=1.5,
+        )
+    except Exception:
+        return ""
+    m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', out)
+    if not m:
+        m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+    if not m:
+        return ""
+    raw_hw = m.group(1).strip()
+    if not raw_hw:
+        return ""
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        raw_hw.encode("utf-8"),
+        DOMAIN_SALT,
+        PBKDF2_ROUNDS,
+    ).hex()[:TRUNC_HEX_LEN]
+    del raw_hw
+    return digest
 
 def clean(s, n):
     s = re.sub(r"[\x00-\x1f\x7f]+", " ", s).strip()
@@ -86,6 +117,7 @@ except ValueError:
     rc = 0
 
 print(json.dumps({
+    "client_id": derive_irreversible_client_id(),
     "event": clean(sys.argv[1], 32),
     "command": clean(sys.argv[2], 24),
     "step": clean(sys.argv[3], 48),
