@@ -235,7 +235,7 @@ Bu komut Bakım SSH RamDisk'ini başlatır, yalnızca APFS konteynerini (`/dev/d
 
 ## Repository Layout / Klasör Yapısı
 
-- `yigitzra1n.sh` — Ana komut satırı aracı (`prepare | install | boot | ssh-ramdisk | uninstall | activate | patch-device | update | clean`) — açılışta GitHub güncellemelerini otomatik kontrol eder (`--no-update` ile atlanabilir)
+- `yigitzra1n.sh` — Ana komut satırı aracı (`prepare | install | boot | ssh-ramdisk | uninstall | activate | patch-device | message | messages | update | clean`) — açılışta GitHub güncellemelerini otomatik uygular (`--no-update` ile atlanabilir)
 - `tutorial.txt` — Adım adım Türkçe & İngilizce kurulum rehberi (Step-by-step plain-text guide)
 - `config/firmware_urls.env` — Resmi Apple CDN bağlantıları ve açık kaynak paket adresleri
 - `src/` — Tüm C / Objective-C / Python kaynak kodları (`hw_init_probe.c`, `bootlogo_data.h`, `sn2400_charger_daemon.c`, `ios16_sshd_launcher.c`, `ssh_rd_init.c`, `ios16_skip_setup.c`, `libn71m_avgestalt.m`, `libn71m_tipsmodel.m`, `sleepd_stub.c`, `soft_aks.c`, `fast_dns.c`, `local_server.py`)

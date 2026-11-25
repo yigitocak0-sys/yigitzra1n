@@ -331,4 +331,23 @@ if command -v ideviceinfo >/dev/null 2>&1; then
 fi
 telemetry_send "install_success" "${TELEMETRY_CMD:-activate}" "ACTIVATE_DONE" "activate_device.sh" "$LINENO" 0 "activated" ""
 telemetry_mark_reported
-echo "[+] Done!"
+echo "[+] Done! Your iPhone 6s is activated and ready."
+echo ""
+echo "======================================================================"
+echo "  Share your feedback or leave a message for me (I read all of them!)"
+echo "======================================================================"
+if [[ -t 0 ]]; then
+  echo "  Type a short comment/thanks below and press Enter to send it now,"
+  echo "  or just press Enter to skip."
+  echo "  (You can also send anytime:  ./yigitzra1n.sh message"
+  echo "   and check for my reply:    ./yigitzra1n.sh messages)"
+  printf "  > "
+  user_feedback=""
+  IFS= read -r user_feedback || true
+  if [[ -n "${user_feedback//[[:space:]]/}" ]]; then
+    telemetry_send_message "$user_feedback" "activate" || true
+  fi
+else
+  echo "  Send a message / feedback : ./yigitzra1n.sh message"
+  echo "  Check for my reply        : ./yigitzra1n.sh messages"
+fi

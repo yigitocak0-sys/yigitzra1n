@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 
 YIGITZRA1N_TELEMETRY_URL="${YIGITZRA1N_TELEMETRY_URL:-https://telemetry.yigitz.com/v1/event}"
+YIGITZRA1N_MESSAGE_URL="${YIGITZRA1N_MESSAGE_URL:-https://telemetry.yigitz.com/v1/message}"
+YIGITZRA1N_MESSAGES_URL="${YIGITZRA1N_MESSAGES_URL:-https://telemetry.yigitz.com/v1/messages}"
 YIGITZRA1N_NO_TELEMETRY="${YIGITZRA1N_NO_TELEMETRY:-0}"
 if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   _ver_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/VERSION"
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.11"
+    YIGITZRA1N_TOOL_VERSION="1.12"
   fi
 fi
 
@@ -237,4 +239,187 @@ PY
     return "$rc"
   fi
   return 0
+}
+
+telemetry_derive_client_id() {
+  python3 - <<'PY' 2>/dev/null || true
+import hashlib, re, subprocess
+
+DOMAIN_SALT = b"yigitzra1n:one-way-anon-client:v1"
+PBKDF2_ROUNDS = 200_000
+TRUNC_HEX_LEN = 16
+
+try:
+    out = subprocess.check_output(
+        ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+        timeout=1.5,
+    )
+except Exception:
+    out = ""
+m = re.search(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', out) or re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+if m:
+    raw_hw = m.group(1).strip()
+    if raw_hw:
+        digest = hashlib.pbkdf2_hmac("sha256", raw_hw.encode("utf-8"), DOMAIN_SALT, PBKDF2_ROUNDS).hex()[:TRUNC_HEX_LEN]
+        del raw_hw
+        print(digest)
+PY
+}
+
+telemetry_send_message() {
+  local msg_text="${1:-}"
+  local context="${2:-cli}"
+
+  command -v curl >/dev/null 2>&1 || { echo "[ERROR] curl is required to send messages." >&2; return 1; }
+  command -v python3 >/dev/null 2>&1 || { echo "[ERROR] python3 is required to send messages." >&2; return 1; }
+
+  local cid=""
+  cid="$(telemetry_derive_client_id)"
+  if [[ -z "$cid" ]]; then
+    echo "[ERROR] Could not derive anonymous client_id on this Mac." >&2
+    return 1
+  fi
+
+  local host_os="" host_arch="" tool_ver=""
+  host_os="$(sw_vers -productVersion 2>/dev/null || uname -s 2>/dev/null || true)"
+  host_arch="$(uname -m 2>/dev/null || true)"
+  tool_ver="$(telemetry_effective_version)"
+
+  local payload=""
+  payload="$(python3 - "$cid" "$msg_text" "$context" "$host_arch" "$host_os" "$tool_ver" <<'PY'
+import json, sys
+
+cid, msg, ctx, arch, os_ver, ver = sys.argv[1:7]
+msg = msg.strip()
+if len(msg) < 2:
+    sys.exit(2)
+print(json.dumps({
+    "client_id": cid,
+    "message": msg[:600],
+    "context": ctx[:24],
+    "host_arch": arch[:24],
+    "host_os": os_ver[:32],
+    "tool_version": ver[:32],
+}))
+PY
+)" || {
+    echo "[ERROR] Message must be at least 2 characters." >&2
+    return 1
+  }
+
+  local resp_file=""
+  resp_file="$(mktemp "${TMPDIR:-/tmp}/.yigitz_msg.XXXXXX")"
+  local http_code="000"
+  http_code="$(curl -sS --connect-timeout 5 --max-time 12 \
+    -o "$resp_file" -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "$YIGITZRA1N_MESSAGE_URL" 2>/dev/null || printf '000')"
+
+  local resp_body=""
+  resp_body="$(cat "$resp_file" 2>/dev/null || true)"
+  rm -f "$resp_file" 2>/dev/null || true
+
+  case "$http_code" in
+    200|201)
+      echo "[+] Message sent! I read all messages — check for a reply anytime with:"
+      echo "    ./yigitzra1n.sh messages"
+      return 0
+      ;;
+    429)
+      local retry_s=""
+      retry_s="$(python3 - "$resp_body" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get("retry_after", ""))
+except Exception:
+    pass
+PY
+)"
+      echo "[!] Rate limit reached — please wait ${retry_s:-a minute}s before sending another message." >&2
+      return 1
+      ;;
+    409)
+      echo "[!] You already sent that same message recently." >&2
+      return 1
+      ;;
+    000)
+      echo "[ERROR] Could not reach message server ($YIGITZRA1N_MESSAGE_URL)." >&2
+      return 1
+      ;;
+    *)
+      echo "[ERROR] Server rejected message (HTTP $http_code): ${resp_body:-unknown error}" >&2
+      return 1
+      ;;
+  esac
+}
+
+telemetry_fetch_messages() {
+  command -v curl >/dev/null 2>&1 || { echo "[ERROR] curl is required to check messages." >&2; return 1; }
+  command -v python3 >/dev/null 2>&1 || { echo "[ERROR] python3 is required to check messages." >&2; return 1; }
+
+  local cid=""
+  cid="$(telemetry_derive_client_id)"
+  if [[ -z "$cid" ]]; then
+    echo "[ERROR] Could not derive anonymous client_id on this Mac." >&2
+    return 1
+  fi
+
+  local payload=""
+  payload="$(python3 - "$cid" <<'PY'
+import json, sys
+print(json.dumps({"client_id": sys.argv[1]}))
+PY
+)"
+
+  local resp_file=""
+  resp_file="$(mktemp "${TMPDIR:-/tmp}/.yigitz_msgs.XXXXXX")"
+  local http_code="000"
+  http_code="$(curl -sS --connect-timeout 5 --max-time 12 \
+    -o "$resp_file" -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "$YIGITZRA1N_MESSAGES_URL" 2>/dev/null || printf '000')"
+
+  local resp_body=""
+  resp_body="$(cat "$resp_file" 2>/dev/null || true)"
+  rm -f "$resp_file" 2>/dev/null || true
+
+  if [[ "$http_code" == "429" ]]; then
+    echo "[!] Too many message checks right now — please wait a bit and try again." >&2
+    return 1
+  fi
+  if [[ "$http_code" != "200" ]]; then
+    echo "[ERROR] Could not fetch messages (HTTP $http_code)." >&2
+    return 1
+  fi
+
+  python3 - "$resp_body" <<'PY'
+import datetime, json, sys
+
+data = json.loads(sys.argv[1])
+msgs = data.get("messages") or []
+if not msgs:
+    print("[*] No messages sent from this Mac yet.")
+    print("    Send one anytime with: ./yigitzra1n.sh message")
+    sys.exit(0)
+
+print(f"=== Your Messages ({len(msgs)}) ===")
+for idx, m in enumerate(msgs, 1):
+    ts = datetime.datetime.fromtimestamp(int(m.get("ts", 0))).strftime("%Y-%m-%d %H:%M")
+    ctx = m.get("context") or "cli"
+    print(f"\n[{idx}] ({ts} · {ctx}) You:")
+    print(f"    {m.get('body', '')}")
+    rep = (m.get("reply") or "").strip()
+    if rep:
+        rts = int(m.get("reply_ts") or 0)
+        rts_s = datetime.datetime.fromtimestamp(rts).strftime("%Y-%m-%d %H:%M") if rts else ""
+        hdr = f"Reply from Yigit ({rts_s}):" if rts_s else "Reply from Yigit:"
+        print(f"    -> {hdr}")
+        print(f"       {rep}")
+    else:
+        print("    -> (no reply yet)")
+PY
 }

@@ -25,6 +25,7 @@ BOOT_ARGS=""
 DEVICE_HOST="127.0.0.1"
 DEVICE_PORT="2222"
 IC_INFO=""
+MESSAGE_PARTS=()
 ORIG_ARGS=("$@")
 
 usage() {
@@ -44,6 +45,8 @@ Commands:
                 stock iOS 15.8.8 restores cleanly without iTunes/Finder Error 9.
   activate      Activate device & complete initial setup over SSH/USB.
   patch-device  Apply/refresh live userland patches over SSH (optional --ic-info).
+  message       Send a direct bug report, result, or thank-you message to Yigit (I read them!).
+  messages      View your sent messages and check for developer replies.
   update        Check GitHub and update yigitzra1n in place (supports both git and ZIP installs).
   clean         Remove build/ artifacts on your Mac (keeps ipsw/ and .cache/; does not touch device).
 
@@ -83,7 +86,16 @@ while [[ $# -gt 0 ]]; do
     --port) DEVICE_PORT="$2"; shift 2 ;;
     --ic-info) IC_INFO="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "[ERROR] Unknown option: $1" >&2; usage; exit 2 ;;
+    *)
+      if [[ "$CMD" == "message" && "$1" != -* ]]; then
+        MESSAGE_PARTS+=("$1")
+        shift
+      else
+        echo "[ERROR] Unknown option: $1" >&2
+        usage
+        exit 2
+      fi
+      ;;
   esac
 done
 
@@ -1051,6 +1063,34 @@ cmd_activate() {
     bash "$ROOT_DIR/scripts/activate_device.sh"
 }
 
+cmd_message() {
+  TELEMETRY_STEP="MESSAGE"
+  local msg_text=""
+  if (( ${#MESSAGE_PARTS[@]} > 0 )); then
+    msg_text="${MESSAGE_PARTS[*]}"
+  elif [[ -t 0 ]]; then
+    echo "======================================================================"
+    echo "  Send a Direct Message to Yigit (bug report, result, or feedback)"
+    echo "======================================================================"
+    echo "  I read every message! Max 600 characters (empty input cancels)."
+    printf "  Message: "
+    IFS= read -r msg_text || true
+  else
+    msg_text="$(cat)"
+  fi
+
+  if [[ -z "${msg_text//[[:space:]]/}" ]]; then
+    echo "[*] Cancelled (empty message)."
+    return 0
+  fi
+  telemetry_send_message "$msg_text" "cli"
+}
+
+cmd_messages() {
+  TELEMETRY_STEP="MESSAGES"
+  telemetry_fetch_messages
+}
+
 cmd_clean() {
   echo "[*] Removing $BUILD_DIR (keeping ipsw/ and .cache/)..."
   rm -rf "$BUILD_DIR"
@@ -1065,6 +1105,8 @@ case "$CMD" in
   uninstall)    cmd_uninstall ;;
   activate)     cmd_activate ;;
   patch-device) cmd_patch_device ;;
+  message)      cmd_message ;;
+  messages)     cmd_messages ;;
   clean)        cmd_clean ;;
   *) echo "[ERROR] Unknown command: $CMD" >&2; usage; exit 2 ;;
 esac

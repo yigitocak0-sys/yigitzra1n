@@ -95,6 +95,29 @@ def get_remote_sha(repo_url: str, sha_url: str, branch: str, timeout: int) -> st
                 return val.lower()
     except Exception:
         pass
+    if shutil.which("curl"):
+        try:
+            r = run_cmd(
+                [
+                    "curl",
+                    "-fsSL",
+                    "--connect-timeout",
+                    str(timeout),
+                    "--max-time",
+                    str(max(timeout, 10)),
+                    "-H",
+                    "Accept: application/vnd.github.sha",
+                    "-A",
+                    "yigitzra1n-updater",
+                    sha_url,
+                ],
+                timeout=max(timeout + 2, 12),
+            )
+            val = r.stdout.strip()
+            if r.returncode == 0 and re.fullmatch(r"[0-9a-fA-F]{40}", val):
+                return val.lower()
+        except Exception:
+            pass
     return ""
 
 
@@ -177,18 +200,16 @@ def update_git_repo(
         return EXIT_OK
 
     dirty_r = run_cmd(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, timeout=5)
-    if dirty_r.returncode == 0 and dirty_r.stdout.strip() and not force:
-        print("[!] Local uncommitted changes detected; skipping auto-update.")
-        return EXIT_ERR if explicit else EXIT_OK
-
-    if force and dirty_r.stdout.strip():
+    if dirty_r.returncode == 0 and dirty_r.stdout.strip():
         run_cmd(["git", "reset", "--hard", "HEAD"], cwd=root, timeout=10)
 
     print(f"[*] Updating yigitzra1n from GitHub ({local_sha[:7]} -> {fetch_sha[:7]})...")
     merge_r = run_cmd(["git", "merge", "--ff-only", fetch_sha], cwd=root, timeout=15)
     if merge_r.returncode != 0:
-        print("[!] Fast-forward update failed; please check git status.", file=sys.stderr)
-        return EXIT_ERR if explicit else EXIT_OK
+        reset_r = run_cmd(["git", "reset", "--hard", fetch_sha], cwd=root, timeout=15)
+        if reset_r.returncode != 0:
+            print("[!] Force update failed; please check git status.", file=sys.stderr)
+            return EXIT_ERR if explicit else EXIT_OK
 
     ensure_exec_permissions(root)
     print(f"[+] Updated yigitzra1n to {fetch_sha[:7]}.")
@@ -317,8 +338,29 @@ def update_zip_install(
             with urllib.request.urlopen(req, timeout=max(timeout, 20)) as resp, tar_path.open("wb") as out:
                 shutil.copyfileobj(resp, out)
         except Exception as e:
-            print(f"[!] Update download failed: {e}", file=sys.stderr if explicit else sys.stdout)
-            return EXIT_ERR if explicit else EXIT_OK
+            if shutil.which("curl"):
+                cr = run_cmd(
+                    [
+                        "curl",
+                        "-fsSL",
+                        "--connect-timeout",
+                        str(timeout),
+                        "--max-time",
+                        str(max(timeout, 30)),
+                        "-A",
+                        "yigitzra1n-updater",
+                        "-o",
+                        str(tar_path),
+                        tarball_url,
+                    ],
+                    timeout=max(timeout + 5, 35),
+                )
+                if cr.returncode != 0 or not tar_path.is_file():
+                    print(f"[!] Update download failed: {e}", file=sys.stderr if explicit else sys.stdout)
+                    return EXIT_ERR if explicit else EXIT_OK
+            else:
+                print(f"[!] Update download failed: {e}", file=sys.stderr if explicit else sys.stdout)
+                return EXIT_ERR if explicit else EXIT_OK
 
         src_root = safe_extract_tarball(tar_path, extract_dir)
         if not (src_root / "yigitzra1n.sh").is_file():
