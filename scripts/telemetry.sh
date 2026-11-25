@@ -9,7 +9,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.14"
+    YIGITZRA1N_TOOL_VERSION="1.15"
   fi
 fi
 
@@ -106,6 +106,12 @@ def derive_irreversible_client_id() -> str:
 def clean(s, n):
     s = re.sub(r"[\x00-\x1f\x7f]+", " ", s).strip()
     s = re.sub(r"/(?:Users|home)/[^/\s:\"']+", "/<user>", s)
+    s = re.sub(r"(?i)(\b(?:device\s+)?serial(?:\s+number)?(?:\s+is)?\s*[:= ]\s*|\bSRNM\s*:\s*\[?|\bSerialNumber\s*[:= ]\s*)[A-Za-z0-9]{6,20}", r"\1<serial>", s)
+    s = re.sub(r"(?i)(\b(?:UniqueDeviceID|UDID)\s*[:= ]\s*)[0-9A-Fa-f-]{16,45}", r"\1<udid>", s)
+    s = re.sub(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}\b", "<udid>", s)
+    s = re.sub(r"\b[0-9a-fA-F]{40}\b", "<udid>", s)
+    s = re.sub(r"(?i)(\b(?:ECID|UniqueChipID)\s*[:= ]\s*)(?:0x)?[0-9a-fA-F]{8,20}\b", r"\1<id>", s)
+    s = re.sub(r"(?i)(\bIMEI2?\s*[:= ]\s*)\d{10,20}\b", r"\1<imei>", s)
     s = re.sub(r"\b\d{12,20}\b", "<id>", s)
     return s[:n]
 
@@ -187,8 +193,7 @@ telemetry_run_py() {
   local err_file="${TMPDIR:-/tmp}/.py_err_$$"
   local rc=0
 
-  set +e
-  python3 - "$py_bin" "$script_path" "$err_file" "$@" <<'PY'
+  if python3 - "$py_bin" "$script_path" "$err_file" "$@" <<'PY'; then
 import subprocess, sys
 
 py_bin, script_path, err_file = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -220,8 +225,10 @@ with open(err_file, "w", encoding="utf-8") as f:
         f.write(" | ".join(tail_lines))
 sys.exit(rc)
 PY
-  rc=$?
-  set -e
+    rc=0
+  else
+    rc=$?
+  fi
 
   local err_msg=""
   if [[ -f "$err_file" ]]; then
