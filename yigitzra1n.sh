@@ -908,11 +908,35 @@ cmd_uninstall() {
   echo "  WARNING: ALL data on the device will be erased!"
   printf "  Type YES to continue (anything else aborts): "
   local confirm=""
-  read -r confirm
+  read -r confirm || true
   if [[ "$confirm" != "YES" ]]; then
     echo "[*] Aborted."
     exit 0
   fi
+
+  local uninstall_reason=""
+  echo ""
+  echo "  Please write why you are uninstalling iOS 16.7.16 (required):"
+  echo "  (e.g. battery drain, camera/audio issue, boot problem, just testing...)"
+  while true; do
+    printf "  Reason (min 4 chars): "
+    if ! IFS= read -r uninstall_reason; then
+      echo ""
+      echo "[*] Uninstall aborted (reason is required)." >&2
+      exit 0
+    fi
+    local trimmed_reason=""
+    trimmed_reason="$(printf '%s' "$uninstall_reason" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+    if (( ${#trimmed_reason} >= 4 )); then
+      uninstall_reason="$trimmed_reason"
+      break
+    fi
+    echo "  [!] Please enter at least 4 characters." >&2
+  done
+
+  TELEMETRY_STEP="UNINSTALL_REASON"
+  telemetry_send "uninstall" "uninstall" "UNINSTALL_REASON" "yigitzra1n.sh" "$LINENO" 0 "user_uninstall_reason" "$uninstall_reason" 1
+  TELEMETRY_STEP="UNINSTALL_RAMDISK"
 
   prompt_dfu "Uninstall / Reset APFS — Maintenance SSH RamDisk (DFU Mode)"
   local py_args=(--ssh-ramdisk)
@@ -999,7 +1023,7 @@ cmd_uninstall() {
   cleanup_uninstall
   trap 'telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$?"' EXIT
   rm -f "$INSTALL_STATE_FILE"
-  telemetry_send "install_success" "uninstall" "UNINSTALL_DONE" "yigitzra1n.sh" "$LINENO" 0 "uninstalled" ""
+  telemetry_send "uninstall" "uninstall" "UNINSTALL_DONE" "yigitzra1n.sh" "$LINENO" 0 "uninstalled" "$uninstall_reason" 1
   sleep 5
 
   echo ""
@@ -1010,10 +1034,12 @@ cmd_uninstall() {
     echo "    Detected local stock IPSW: $ipsw_1588"
     printf "    Start stock iOS 15.8.8 restore now via idevicerestore? [y/N]: "
     local rest_ans=""
-    read -r rest_ans
+    read -r rest_ans || true
     if [[ "$rest_ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+      TELEMETRY_STEP="UNINSTALL_RESTORE"
       mkdir -p "$BUILD_DIR/.tmp/restore_tmp" "$BUILD_DIR/.tmp/restore_cache"
       TMPDIR="$BUILD_DIR/.tmp/restore_tmp" idevicerestore -e -C "$BUILD_DIR/.tmp/restore_cache" "$ipsw_1588"
+      telemetry_send "uninstall" "uninstall" "UNINSTALL_RESTORE_DONE" "yigitzra1n.sh" "$LINENO" 0 "restored_15_8_8" "$uninstall_reason" 1
       return 0
     fi
   fi
