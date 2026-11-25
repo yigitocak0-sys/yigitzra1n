@@ -9,7 +9,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.16"
+    YIGITZRA1N_TOOL_VERSION="1.17"
   fi
 fi
 
@@ -421,16 +421,111 @@ print(f"=== Your Messages ({len(msgs)}) ===")
 for idx, m in enumerate(msgs, 1):
     ts = datetime.datetime.fromtimestamp(int(m.get("ts", 0))).strftime("%Y-%m-%d %H:%M")
     ctx = m.get("context") or "cli"
-    print(f"\n[{idx}] ({ts} · {ctx}) You:")
-    print(f"    {m.get('body', '')}")
+    body = (m.get("body") or "").strip()
     rep = (m.get("reply") or "").strip()
-    if rep:
-        rts = int(m.get("reply_ts") or 0)
-        rts_s = datetime.datetime.fromtimestamp(rts).strftime("%Y-%m-%d %H:%M") if rts else ""
-        hdr = f"Reply from Yigit ({rts_s}):" if rts_s else "Reply from Yigit:"
-        print(f"    -> {hdr}")
-        print(f"       {rep}")
+    if not body and rep:
+        rts = int(m.get("reply_ts") or m.get("ts") or 0)
+        rts_s = datetime.datetime.fromtimestamp(rts).strftime("%Y-%m-%d %H:%M") if rts else ts
+        print(f"\n[{idx}] ({rts_s}) Developer Notice from Yigit:")
+        print(f"    {rep}")
     else:
-        print("    -> (no reply yet)")
+        print(f"\n[{idx}] ({ts} · {ctx}) You:")
+        print(f"    {body}")
+        if rep:
+            rts = int(m.get("reply_ts") or 0)
+            rts_s = datetime.datetime.fromtimestamp(rts).strftime("%Y-%m-%d %H:%M") if rts else ""
+            hdr = f"Reply from Yigit ({rts_s}):" if rts_s else "Reply from Yigit:"
+            print(f"    -> {hdr}")
+            print(f"       {rep}")
+        else:
+            print("    -> (no reply yet)")
 PY
+}
+
+telemetry_check_unread_messages() {
+  [[ "${YIGITZRA1N_NO_TELEMETRY:-0}" == "1" ]] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  local cid=""
+  cid="$(telemetry_derive_client_id)"
+  [[ -n "$cid" ]] || return 0
+
+  local payload=""
+  payload="$(python3 - "$cid" <<'PY' 2>/dev/null || true
+import json, sys
+print(json.dumps({"client_id": sys.argv[1], "unread_only": True}))
+PY
+)"
+  [[ -n "$payload" ]] || return 0
+
+  local resp_file=""
+  resp_file="$(mktemp "${TMPDIR:-/tmp}/.yigitz_unread.XXXXXX" 2>/dev/null || true)"
+  [[ -n "$resp_file" ]] || return 0
+
+  local http_code=""
+  http_code="$(curl -sS --connect-timeout 2 --max-time 3 \
+    -o "$resp_file" -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "$YIGITZRA1N_MESSAGES_URL" 2>/dev/null || true)"
+  http_code="${http_code:0:3}"
+
+  local resp_body=""
+  resp_body="$(cat "$resp_file" 2>/dev/null || true)"
+  rm -f "$resp_file" 2>/dev/null || true
+
+  [[ "$http_code" == "200" && -n "$resp_body" ]] || return 0
+
+  local has_unread=0
+  if python3 - "$resp_body" <<'PY'; then
+import datetime, json, sys
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(10)
+
+msgs = [m for m in (data.get("messages") or []) if (m.get("reply") or "").strip()]
+if not msgs:
+    sys.exit(10)
+
+print("")
+print("======================================================================")
+print("  MESSAGE FROM YIGIT (yigitzra1n developer)")
+print("======================================================================")
+for m in msgs:
+    rts = int(m.get("reply_ts") or m.get("ts") or 0)
+    rts_s = datetime.datetime.fromtimestamp(rts).strftime("%Y-%m-%d %H:%M") if rts else ""
+    body = (m.get("body") or "").strip()
+    rep = (m.get("reply") or "").strip()
+    if rts_s:
+        print(f"  [{rts_s}]")
+    if body:
+        short_body = body if len(body) <= 80 else body[:77] + "..."
+        print(f"  Re your message: \"{short_body}\"")
+    for line in rep.splitlines():
+        print(f"  {line}")
+    print("----------------------------------------------------------------------")
+PY
+    has_unread=1
+  else
+    has_unread=0
+  fi
+
+  [[ "$has_unread" -eq 1 ]] || return 0
+
+  if [[ -t 0 ]]; then
+    printf "  Reply to Yigit (optional — type reply & press Enter, or Enter to continue): "
+    local dev_reply=""
+    IFS= read -r dev_reply || true
+    if [[ -n "${dev_reply//[[:space:]]/}" ]]; then
+      telemetry_send_message "$dev_reply" "dev_reply" || true
+    fi
+  else
+    echo "  Reply anytime with: ./yigitzra1n.sh message <your reply>"
+  fi
+  echo "======================================================================"
+  echo ""
+  return 0
 }

@@ -159,6 +159,10 @@ export TELEMETRY_PARENT=1
 export TELEMETRY_MARKER_FILE="$BUILD_DIR/.tmp/.telemetry_reported"
 rm -f "$TELEMETRY_MARKER_FILE" 2>/dev/null || true
 telemetry_track_first_run "$ROOT_DIR" "$CMD"
+if [[ "$CMD" != "clean" && "$CMD" != "messages" && "$CMD" != "update" && "${YIGITZRA1N_MSG_CHECKED:-0}" != "1" ]]; then
+  export YIGITZRA1N_MSG_CHECKED=1
+  telemetry_check_unread_messages || true
+fi
 trap 'exit 130' INT
 trap 'telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$?"' EXIT
 trap 'telemetry_trap_err "$TELEMETRY_CMD" "$TELEMETRY_STEP" "yigitzra1n.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR

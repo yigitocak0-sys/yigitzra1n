@@ -56,6 +56,14 @@ else
   echo "[*] Using repo-volume staging at $STAGE_ROOT (/tmp has only ${TMP_AVAIL_GB} GB free)"
 fi
 export TMPDIR="$STAGE_ROOT"
+STAGE_AVAIL_KB="$(df -k "$STAGE_ROOT" | awk 'NR==2 {print $4}')"
+STAGE_AVAIL_GB=$(( STAGE_AVAIL_KB / 1024 / 1024 ))
+if (( STAGE_AVAIL_GB < 14 )); then
+  echo "[ERROR] Not enough free disk space at $STAGE_ROOT (${STAGE_AVAIL_GB} GB free, need >= 14 GB for RootFS build)." >&2
+  telemetry_mark_reported
+  telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_7_ROOTFS}" "06_build_rootfs.sh" "$LINENO" 28 "insufficient_disk_space" "RootFS staging $STAGE_ROOT has ${STAGE_AVAIL_GB} GB free (need >= 14 GB)"
+  exit 1
+fi
 TMP_WORK="$(mktemp -d "$STAGE_ROOT/yigitzra1n_rootfs.XXXXXX")"
 TMP_MNT="$(mktemp -d /private/tmp/yigitzra1n_mnt.XXXXXX)"
 MNT_R16="$TMP_MNT/mnt_r16"
@@ -87,39 +95,84 @@ extract_zip_entry() {
   local out_path="$3"
   local label="${4:-$member}"
   mkdir -p "$(dirname "$out_path")"
-  "$VENV_PY" - "$ipsw" "$member" "$out_path" "$label" <<'PY'
-import os, sys, time, zipfile
+  local err_file=""
+  err_file="$(mktemp "${STAGE_ROOT:-/tmp}/.zip_err.XXXXXX")"
+  local rc=0
+  set +e
+  "$VENV_PY" - "$ipsw" "$member" "$out_path" "$label" "$err_file" <<'PY'
+import errno, os, shutil, sys, time, zipfile, zlib
 
-ipsw, member, out_path, label = sys.argv[1:5]
-with zipfile.ZipFile(ipsw, "r") as zf:
-    info = zf.getinfo(member)
-    total = info.file_size
-    done = 0
-    t0 = time.monotonic()
-    last_print = 0.0
-    chunk_sz = 8 * 1024 * 1024
-    with zf.open(info, "r") as src, open(out_path, "wb") as dst:
-        while True:
-            buf = src.read(chunk_sz)
-            if not buf:
-                break
-            dst.write(buf)
-            done += len(buf)
-            now = time.monotonic()
-            if now - last_print >= 0.25 or done == total:
-                elapsed = max(now - t0, 1e-3)
-                pct = (done * 100.0 / total) if total else 100.0
-                mb_done = done / (1024 * 1024)
-                mb_tot = total / (1024 * 1024)
-                speed = mb_done / elapsed
-                sys.stdout.write(
-                    f"\r  [*] Extracting {label}: {pct:5.1f}% ({mb_done:6.1f} / {mb_tot:6.1f} MB) @ {speed:5.1f} MB/s"
-                )
-                sys.stdout.flush()
-                last_print = now
-sys.stdout.write("\n")
-sys.stdout.flush()
+ipsw, member, out_path, label, err_file = sys.argv[1:6]
+try:
+    with zipfile.ZipFile(ipsw, "r") as zf:
+        info = zf.getinfo(member)
+        total = info.file_size
+        done = 0
+        t0 = time.monotonic()
+        last_print = 0.0
+        chunk_sz = 8 * 1024 * 1024
+        with zf.open(info, "r") as src, open(out_path, "wb") as dst:
+            while True:
+                buf = src.read(chunk_sz)
+                if not buf:
+                    break
+                dst.write(buf)
+                done += len(buf)
+                now = time.monotonic()
+                if now - last_print >= 0.25 or done == total:
+                    elapsed = max(now - t0, 1e-3)
+                    pct = (done * 100.0 / total) if total else 100.0
+                    mb_done = done / (1024 * 1024)
+                    mb_tot = total / (1024 * 1024)
+                    speed = mb_done / elapsed
+                    sys.stdout.write(
+                        f"\r  [*] Extracting {label}: {pct:5.1f}% ({mb_done:6.1f} / {mb_tot:6.1f} MB) @ {speed:5.1f} MB/s"
+                    )
+                    sys.stdout.flush()
+                    last_print = now
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+except Exception as e:
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    try:
+        free_gb = shutil.disk_usage(os.path.dirname(os.path.abspath(out_path))).free / (1024 ** 3)
+    except Exception:
+        free_gb = -1.0
+    if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+        reason = "disk_full_extract"
+    elif isinstance(e, (zipfile.BadZipFile, zlib.error, EOFError, KeyError)):
+        reason = "corrupted_ipsw_extract"
+    else:
+        reason = "extract_zip_failed"
+    detail = f"extract {label} ({os.path.basename(ipsw)}): {type(e).__name__}: {e} [free={free_gb:.1f}GB]"
+    try:
+        with open(err_file, "w", encoding="utf-8") as ef:
+            ef.write(f"{reason}\n{detail}")
+    except Exception:
+        pass
+    print(f"[ERROR] Failed extracting {label} from {os.path.basename(ipsw)}: {type(e).__name__}: {e} (free disk: {free_gb:.1f} GB)", file=sys.stderr)
+    if reason == "corrupted_ipsw_extract":
+        print(f"        The IPSW file looks corrupted/incomplete. Delete it and re-run ./yigitzra1n.sh prepare:\n        {ipsw}", file=sys.stderr)
+    elif reason == "disk_full_extract":
+        print("        Disk is full. Free at least 15-20 GB and re-run ./yigitzra1n.sh prepare.", file=sys.stderr)
+    sys.exit(1)
 PY
+  rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    local reason="extract_zip_failed"
+    local detail="extract $label failed (exit $rc)"
+    if [[ -f "$err_file" ]]; then
+      reason="$(sed -n '1p' "$err_file" 2>/dev/null || echo "extract_zip_failed")"
+      detail="$(sed -n '2p' "$err_file" 2>/dev/null || echo "$detail")"
+    fi
+    rm -f "$err_file" 2>/dev/null || true
+    telemetry_mark_reported
+    telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "${TELEMETRY_STEP:-PREPARE_7_ROOTFS}" "06_build_rootfs.sh" "${BASH_LINENO[0]:-$LINENO}" "$rc" "$reason" "$detail"
+    return "$rc"
+  fi
+  rm -f "$err_file" 2>/dev/null || true
 }
 
 mkdir -p "$HYBRID_DIR" "$MNT_R16" "$MNT_SYS" "$MNT_APP" "$MNT_R15" "$MNT_IP8" "$MNT_IP8_SYS" "$MNT_IP8_APP"
