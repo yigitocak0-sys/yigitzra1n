@@ -27,6 +27,22 @@ find_irecovery_bin() {
   printf '%s' "/opt/homebrew/bin/irecovery"
 }
 
+find_brew_bin() {
+  local cand
+  cand="$(command -v brew 2>/dev/null || true)"
+  if [[ -n "$cand" && -x "$cand" ]]; then
+    printf '%s' "$cand"
+    return 0
+  fi
+  for cand in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [[ -x "$cand" ]]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
 check_macos_host() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "[ERROR] This toolchain requires macOS (uses hdiutil, asr, codesign, clang)." >&2
@@ -54,30 +70,95 @@ check_cli_tools() {
   fi
 
   local brew_missing=()
-  for tool in zstd iproxy irecovery sshpass; do
-    if ! command -v "$tool" >/dev/null 2>&1 && [[ ! -x "/opt/homebrew/bin/$tool" ]] && [[ ! -x "/usr/local/bin/$tool" ]]; then
-      brew_missing+=("$tool")
-    fi
-  done
-  if (( ${#brew_missing[@]} > 0 )); then
-    echo "[!] Missing Homebrew tools: ${brew_missing[*]}" >&2
-    echo "    Install them with:" >&2
-    echo "      brew install zstd libimobiledevice libirecovery libusb" >&2
-    echo "      brew install hudochenkov/sshpass/sshpass" >&2
-    if declare -F telemetry_send >/dev/null 2>&1; then
-      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_brew_tools" "Missing Homebrew tools: ${brew_missing[*]}"
-      telemetry_mark_reported
-    fi
-    exit 1
-  fi
+  local brew_pkgs=()
+  local need_sshpass=0
+  local need_libusb=0
+
+  command -v zstd >/dev/null 2>&1 || [[ -x "/opt/homebrew/bin/zstd" ]] || [[ -x "/usr/local/bin/zstd" ]] || { brew_missing+=("zstd"); brew_pkgs+=("zstd"); }
+  command -v iproxy >/dev/null 2>&1 || [[ -x "/opt/homebrew/bin/iproxy" ]] || [[ -x "/usr/local/bin/iproxy" ]] || { brew_missing+=("iproxy"); brew_pkgs+=("libimobiledevice"); }
+  command -v irecovery >/dev/null 2>&1 || [[ -x "/opt/homebrew/bin/irecovery" ]] || [[ -x "/usr/local/bin/irecovery" ]] || { brew_missing+=("irecovery"); brew_pkgs+=("libirecovery"); }
+  command -v sshpass >/dev/null 2>&1 || [[ -x "/opt/homebrew/bin/sshpass" ]] || [[ -x "/usr/local/bin/sshpass" ]] || { brew_missing+=("sshpass"); need_sshpass=1; }
 
   if [[ ! -f "/opt/homebrew/lib/libusb-1.0.dylib" && ! -f "/usr/local/lib/libusb-1.0.dylib" ]]; then
-    echo "[!] libusb-1.0.dylib not found. Run: brew install libusb" >&2
-    if declare -F telemetry_send >/dev/null 2>&1; then
-      telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_libusb" "libusb-1.0.dylib not found"
-      telemetry_mark_reported
+    need_libusb=1
+    brew_missing+=("libusb")
+    brew_pkgs+=("libusb")
+  fi
+
+  if (( ${#brew_missing[@]} > 0 )); then
+    local brew_bin=""
+    brew_bin="$(find_brew_bin || true)"
+
+    if [[ -z "$brew_bin" ]]; then
+      echo "[!] Missing tools: ${brew_missing[*]}" >&2
+      echo "[!] Homebrew is not installed on this Mac." >&2
+      echo "    First, install Homebrew:" >&2
+      echo '      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+      echo "    Then install required tools (or re-run yigitzra1n and it will install them automatically):" >&2
+      echo "      brew install zstd libimobiledevice libirecovery libusb" >&2
+      echo "      brew install hudochenkov/sshpass/sshpass" >&2
+      if declare -F telemetry_send >/dev/null 2>&1; then
+        telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_homebrew" "Missing Homebrew and tools: ${brew_missing[*]}"
+        telemetry_mark_reported
+      fi
+      exit 1
     fi
-    exit 1
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+      echo "[!] Missing Homebrew tools: ${brew_missing[*]}" >&2
+      echo "    Run as your normal user (not sudo):" >&2
+      echo "      brew install ${brew_pkgs[*]}" >&2
+      if (( need_sshpass == 1 )); then
+        echo "      brew install hudochenkov/sshpass/sshpass" >&2
+      fi
+      if declare -F telemetry_send >/dev/null 2>&1; then
+        telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_brew_tools" "Missing Homebrew tools under root: ${brew_missing[*]}"
+        telemetry_mark_reported
+      fi
+      exit 1
+    fi
+
+    echo "[*] Missing Homebrew tools: ${brew_missing[*]}"
+    echo "[*] Homebrew found ($brew_bin) — installing missing dependencies automatically..."
+    local install_rc=0
+    if (( ${#brew_pkgs[@]} > 0 )); then
+      "$brew_bin" install "${brew_pkgs[@]}" || install_rc=$?
+    fi
+    if (( install_rc == 0 && need_sshpass == 1 )); then
+      "$brew_bin" install hudochenkov/sshpass/sshpass || install_rc=$?
+    fi
+
+    for _p in /opt/homebrew/bin /usr/local/bin; do
+      if [[ -d "$_p" && ":$PATH:" != *":$_p:"* ]]; then
+        export PATH="$_p:$PATH"
+      fi
+    done
+    unset _p
+
+    local still_missing=()
+    local t
+    for t in zstd iproxy irecovery sshpass; do
+      if ! command -v "$t" >/dev/null 2>&1 && [[ ! -x "/opt/homebrew/bin/$t" ]] && [[ ! -x "/usr/local/bin/$t" ]]; then
+        still_missing+=("$t")
+      fi
+    done
+    if [[ ! -f "/opt/homebrew/lib/libusb-1.0.dylib" && ! -f "/usr/local/lib/libusb-1.0.dylib" ]]; then
+      still_missing+=("libusb")
+    fi
+
+    if (( install_rc != 0 || ${#still_missing[@]} > 0 )); then
+      echo "[!] Automatic Homebrew installation failed or tools are still missing: ${still_missing[*]:-${brew_missing[*]}}" >&2
+      echo "    Install them manually with:" >&2
+      echo "      brew install zstd libimobiledevice libirecovery libusb" >&2
+      echo "      brew install hudochenkov/sshpass/sshpass" >&2
+      if declare -F telemetry_send >/dev/null 2>&1; then
+        telemetry_send "install_fail" "${TELEMETRY_CMD:-${CMD:-unknown}}" "${TELEMETRY_STEP:-ENV_CHECK}" "00_check_env.sh" "$LINENO" 1 "missing_brew_tools" "Brew auto-install failed: ${still_missing[*]:-${brew_missing[*]}}"
+        telemetry_mark_reported
+      fi
+      exit 1
+    fi
+
+    echo "[+] Homebrew dependencies installed!"
   fi
 }
 
