@@ -278,6 +278,22 @@ run_ssh '
 
 ACTIVATE_STEP="RUN_SKIP_SETUP"
 echo "[4/4] Finalizing setup & restarting SpringBoard..."
+(
+  set +e
+  sb_file="$WORK_TMP/statusBarOverrides"
+  if python3 "$ROOT_DIR/scripts/build_statusbar_overrides.py" --out "$sb_file" 2>/dev/null && [[ -s "$sb_file" ]]; then
+    run_ssh '
+      set -e
+      mkdir -p /private/var/mobile/Library/SpringBoard
+      chown mobile:mobile /private/var/mobile/Library /private/var/mobile/Library/SpringBoard 2>/dev/null || true
+      cat > /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp
+      chown mobile:mobile /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp 2>/dev/null || chown 501:501 /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp 2>/dev/null || true
+      chmod 644 /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp
+      mv -f /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp /private/var/mobile/Library/SpringBoard/statusBarOverrides
+    ' < "$sb_file" 2>/dev/null || echo "[!] Non-fatal status bar override step skipped." >&2
+  fi
+) || true
+
 rc=0
 run_ssh '
   set -e

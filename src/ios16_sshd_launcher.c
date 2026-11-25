@@ -118,6 +118,30 @@ int main(void) {
         usleep(250000);
     }
 
+    /* Non-fatal: seed statusBarOverrides ("yigitzra1n" + full signal bars) on new installs */
+    {
+        struct stat st_mob, st_sb;
+        if (stat("/private/var/mobile", &st_mob) == 0 && S_ISDIR(st_mob.st_mode) &&
+            access("/usr/local/share/yigitzra1n/statusBarOverrides", R_OK) == 0 &&
+            (stat("/private/var/mobile/Library/SpringBoard/statusBarOverrides", &st_sb) != 0 ||
+             st_sb.st_size != 3944)) {
+            struct stat st_lib;
+            if (stat("/private/var/mobile/Library", &st_lib) != 0) {
+                mkdir_p("/private/var/mobile/Library", 0755);
+                chown("/private/var/mobile/Library", 501, 501);
+            }
+            if (stat("/private/var/mobile/Library/SpringBoard", &st_lib) != 0) {
+                mkdir_p("/private/var/mobile/Library/SpringBoard", 0755);
+                chown("/private/var/mobile/Library/SpringBoard", 501, 501);
+            }
+            copyfile("/usr/local/share/yigitzra1n/statusBarOverrides",
+                     "/private/var/mobile/Library/SpringBoard/statusBarOverrides",
+                     NULL, COPYFILE_DATA);
+            chmod("/private/var/mobile/Library/SpringBoard/statusBarOverrides", 0644);
+            chown("/private/var/mobile/Library/SpringBoard/statusBarOverrides", 501, 501);
+        }
+    }
+
     if (access("/private/var/jb/.yigitzra1n_ready", F_OK) != 0 &&
         access("/usr/local/procursus/usr/sbin/sshd", X_OK) == 0) {
         mkdir_p("/private/var/jb", 0755);

@@ -407,6 +407,17 @@ chmod 755 \
   "$MNT_R16/usr/lib/libn71m_avgestalt.dylib" \
   "$MNT_R16/usr/lib/libn71m_tipsmodel.dylib"
 
+(
+  set +e
+  mkdir -p "$MNT_R16/usr/local/share/yigitzra1n"
+  "$VENV_PY" "$ROOT_DIR/scripts/build_statusbar_overrides.py" \
+    --out "$MNT_R16/usr/local/share/yigitzra1n/statusBarOverrides" 2>/dev/null || true
+  if [[ -f "$MNT_R16/usr/local/share/yigitzra1n/statusBarOverrides" ]]; then
+    chown root:wheel "$MNT_R16/usr/local/share/yigitzra1n/statusBarOverrides" 2>/dev/null || true
+    chmod 644 "$MNT_R16/usr/local/share/yigitzra1n/statusBarOverrides" 2>/dev/null || true
+  fi
+) || true
+
 patch_offline_macho() {
   local target="$1"
   local bkp="$2"
