@@ -169,8 +169,8 @@ ensure_python_venv() {
   fi
   if ! "$VENV_DIR/bin/python3" -c "import pyimg4, capstone, remotezip" >/dev/null 2>&1; then
     echo "[*] Installing required Python packages (pyimg4, capstone, remotezip)..."
-    "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-    "$VENV_DIR/bin/pip" install --quiet pyimg4 capstone remotezip
+    "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip
+    "$VENV_DIR/bin/python3" -m pip install --quiet pyimg4 capstone remotezip
   fi
 }
 

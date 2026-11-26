@@ -2,6 +2,219 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ORIG_ARGS=("$@")
+APP_HOME="${YIGITZRA1N_HOME:-$HOME/Library/Application Support/yigitzra1n}"
+BIN_DIR="${YIGITZRA1N_BIN_DIR:-$HOME/.local/bin}"
+GLOBAL_BIN="$BIN_DIR/yigitzra1n"
+
+_resolve_real_dir() {
+  local d="$1"
+  if [[ -d "$d" ]]; then
+    (cd "$d" && pwd -P)
+  else
+    printf '%s' "$d"
+  fi
+}
+
+_append_path_profile() {
+  local rc_file="$1"
+  local bin_dir="$2"
+  local marker="# >>> yigitzra1n PATH >>>"
+  if [[ -f "$rc_file" ]] && grep -qF "$marker" "$rc_file" 2>/dev/null; then
+    return 1
+  fi
+  if [[ -f "$rc_file" ]] && grep -qF "$bin_dir" "$rc_file" 2>/dev/null; then
+    return 1
+  fi
+  mkdir -p "$(dirname "$rc_file")"
+  {
+    printf '\n%s\n' "$marker"
+    printf 'export PATH="%s:$PATH"\n' "$bin_dir"
+    printf '# <<< yigitzra1n PATH <<<\n'
+  } >> "$rc_file"
+  return 0
+}
+
+ensure_global_launcher_and_path() {
+  local app_dir="${1:-$APP_HOME}"
+  local fallback_src="${2:-}"
+  if [[ -z "$fallback_src" && -f "$app_dir/.yigitzra1n_source_dir" ]]; then
+    fallback_src="$(head -n 1 "$app_dir/.yigitzra1n_source_dir" 2>/dev/null || true)"
+  fi
+  if [[ -z "$fallback_src" ]]; then
+    fallback_src="$app_dir"
+  fi
+
+  mkdir -p "$BIN_DIR"
+  local escaped_fallback=""
+  escaped_fallback="$(printf '%q' "$fallback_src")"
+
+  local tmp_launcher=""
+  tmp_launcher="$(mktemp "$BIN_DIR/.yigitzra1n.XXXXXX")"
+  cat > "$tmp_launcher" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+APP_HOME="\${YIGITZRA1N_HOME:-\$HOME/Library/Application Support/yigitzra1n}"
+FALLBACK_SRC=$escaped_fallback
+if [[ ! -f "\$APP_HOME/yigitzra1n.sh" ]]; then
+  echo "[*] Setting up yigitzra1n in \$APP_HOME..."
+  mkdir -p "\$APP_HOME"
+  if [[ -n "\$FALLBACK_SRC" && -f "\$FALLBACK_SRC/yigitzra1n.sh" ]]; then
+    cp -ca "\$FALLBACK_SRC/." "\$APP_HOME/" 2>/dev/null || cp -a "\$FALLBACK_SRC/." "\$APP_HOME/"
+    printf '%s\n' "\$FALLBACK_SRC" > "\$APP_HOME/.yigitzra1n_source_dir"
+    date +%s > "\$APP_HOME/.yigitzra1n_installed"
+  elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+    _tmp_dl="\$(mktemp -d /tmp/yigitz_dl.XXXXXX)"
+    trap 'rm -rf "\$_tmp_dl"' EXIT
+    _dl_url="\${YIGITZRA1N_UPDATE_TARBALL_URL:-https://github.com/yigitocak0-sys/yigitzra1n/archive/refs/heads/main.tar.gz}"
+    curl -fsSL --connect-timeout 6 --max-time 30 \
+      -o "\$_tmp_dl/repo.tar.gz" \
+      "\$_dl_url"
+    tar -xzf "\$_tmp_dl/repo.tar.gz" -C "\$_tmp_dl"
+    _extracted="\$(find "\$_tmp_dl" -maxdepth 1 -type d ! -path "\$_tmp_dl" | head -n 1)"
+    [[ -n "\$_extracted" && -f "\$_extracted/yigitzra1n.sh" ]] || {
+      echo "[ERROR] Failed to download yigitzra1n." >&2
+      exit 1
+    }
+    cp -a "\$_extracted/." "\$APP_HOME/"
+    date +%s > "\$APP_HOME/.yigitzra1n_installed"
+    rm -rf "\$_tmp_dl"
+    trap - EXIT
+  else
+    echo "[ERROR] \$APP_HOME is missing and curl/tar unavailable to restore it." >&2
+    exit 1
+  fi
+  chmod +x "\$APP_HOME/yigitzra1n.sh"
+fi
+exec "\$APP_HOME/yigitzra1n.sh" "\$@"
+EOF
+  chmod 755 "$tmp_launcher"
+  if [[ -f "$GLOBAL_BIN" ]] && cmp -s "$tmp_launcher" "$GLOBAL_BIN" 2>/dev/null; then
+    rm -f "$tmp_launcher"
+  else
+    mv -f "$tmp_launcher" "$GLOBAL_BIN"
+  fi
+
+  local sys_linked=0
+  if [[ "${YIGITZRA1N_NO_SYSTEM_BIN:-0}" != "1" ]]; then
+    local sdir=""
+    for sdir in /opt/homebrew/bin /usr/local/bin; do
+      if [[ -d "$sdir" && -w "$sdir" ]]; then
+        if [[ ! -e "$sdir/yigitzra1n" || -L "$sdir/yigitzra1n" ]]; then
+          ln -sf "$GLOBAL_BIN" "$sdir/yigitzra1n" 2>/dev/null && sys_linked=1 || true
+        fi
+      fi
+    done
+  fi
+
+  local rc_updated=0
+  local rc=""
+  _append_path_profile "$HOME/.zshrc" "$BIN_DIR" && rc_updated=1 || true
+  for rc in "$HOME/.bash_profile" "$HOME/.bashrc"; do
+    if [[ -f "$rc" ]]; then
+      _append_path_profile "$rc" "$BIN_DIR" && rc_updated=1 || true
+    fi
+  done
+
+  if [[ "$rc_updated" -eq 1 && "${YIGITZRA1N_QUIET_INSTALL:-0}" != "1" ]]; then
+    if [[ "$sys_linked" -eq 1 ]] || command -v yigitzra1n >/dev/null 2>&1; then
+      echo "[+] Installed global 'yigitzra1n' command — you can now run 'yigitzra1n' from anywhere."
+    else
+      echo "[+] Installed global 'yigitzra1n' command ($GLOBAL_BIN) and added $BIN_DIR to PATH (~/.zshrc)."
+      echo "    Open a new terminal or run: source ~/.zshrc"
+    fi
+  fi
+}
+
+_version_gt() {
+  local v1="$1" v2="$2"
+  [[ -n "$v1" && -n "$v2" && "$v1" != "$v2" ]] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$v1" "$v2" <<'PY' 2>/dev/null
+import re, sys
+def norm(s):
+    return [int(x) for x in re.findall(r"\d+", s)]
+sys.exit(0 if norm(sys.argv[1]) > norm(sys.argv[2]) else 1)
+PY
+    return $?
+  fi
+  [[ "$(printf '%s\n%s\n' "$v1" "$v2" | sort -V | tail -n 1)" == "$v1" ]]
+}
+
+_sync_missing_data_dirs() {
+  local src="$1" dst="$2"
+  local item=""
+  for item in build ipsw .cache .venv .yigitzra1n_init; do
+    [[ -e "$src/$item" ]] || continue
+    if [[ ! -e "$dst/$item" ]]; then
+      cp -ca "$src/$item" "$dst/$item" 2>/dev/null || cp -a "$src/$item" "$dst/$item"
+    elif [[ -d "$src/$item" && -d "$dst/$item" ]]; then
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --ignore-existing "$src/$item/" "$dst/$item/" 2>/dev/null || true
+      elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$src/$item" "$dst/$item" <<'PY' 2>/dev/null || true
+import os, pathlib, shutil, sys
+sroot, droot = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+for sp in sroot.rglob("*"):
+    rel = sp.relative_to(sroot)
+    dp = droot / rel
+    if dp.exists() or dp.is_symlink():
+        continue
+    dp.parent.mkdir(parents=True, exist_ok=True)
+    if sp.is_symlink():
+        os.symlink(os.readlink(sp), dp)
+    elif sp.is_dir():
+        dp.mkdir(parents=True, exist_ok=True)
+    elif sp.is_file():
+        shutil.copy2(sp, dp)
+PY
+      fi
+    fi
+  done
+}
+
+ensure_app_home_and_relocate() {
+  local root_real="" app_real=""
+  root_real="$(_resolve_real_dir "$ROOT_DIR")"
+  mkdir -p "$(dirname "$APP_HOME")"
+  app_real="$(_resolve_real_dir "$APP_HOME")"
+
+  if [[ "${YIGITZRA1N_NO_RELOCATE:-0}" != "1" && "$root_real" != "$app_real" ]]; then
+    if [[ ! -f "$APP_HOME/.yigitzra1n_installed" || ! -f "$APP_HOME/yigitzra1n.sh" ]]; then
+      echo "[*] Installing yigitzra1n into $APP_HOME..."
+      mkdir -p "$APP_HOME"
+      cp -ca "$ROOT_DIR/." "$APP_HOME/" 2>/dev/null || cp -a "$ROOT_DIR/." "$APP_HOME/"
+      chmod +x "$APP_HOME/yigitzra1n.sh"
+      printf '%s\n' "$root_real" > "$APP_HOME/.yigitzra1n_source_dir"
+      date +%s > "$APP_HOME/.yigitzra1n_installed"
+    else
+      _sync_missing_data_dirs "$ROOT_DIR" "$APP_HOME"
+      local src_ver="" app_ver=""
+      [[ -f "$ROOT_DIR/VERSION" ]] && src_ver="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || true)"
+      [[ -f "$APP_HOME/VERSION" ]] && app_ver="$(tr -d '[:space:]' < "$APP_HOME/VERSION" 2>/dev/null || true)"
+      if _version_gt "$src_ver" "$app_ver"; then
+        local citem=""
+        for citem in yigitzra1n.sh VERSION LICENSE README.md tutorial.txt config entitlements scripts src .git; do
+          [[ -e "$ROOT_DIR/$citem" ]] || continue
+          rm -rf "$APP_HOME/$citem"
+          cp -ca "$ROOT_DIR/$citem" "$APP_HOME/$citem" 2>/dev/null || cp -a "$ROOT_DIR/$citem" "$APP_HOME/$citem"
+        done
+        chmod +x "$APP_HOME/yigitzra1n.sh"
+      fi
+      printf '%s\n' "$root_real" > "$APP_HOME/.yigitzra1n_source_dir"
+    fi
+    ensure_global_launcher_and_path "$APP_HOME" "$root_real"
+    exec env YIGITZRA1N_FALLBACK_SRC="$root_real" "$APP_HOME/yigitzra1n.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+  fi
+
+  if [[ "$root_real" == "$app_real" && ! -f "$APP_HOME/.yigitzra1n_installed" ]]; then
+    date +%s > "$APP_HOME/.yigitzra1n_installed"
+  fi
+  ensure_global_launcher_and_path "$ROOT_DIR" "${YIGITZRA1N_FALLBACK_SRC:-}"
+}
+
+ensure_app_home_and_relocate
+
 source "$ROOT_DIR/config/firmware_urls.env"
 source "$ROOT_DIR/scripts/telemetry.sh"
 source "$ROOT_DIR/scripts/00_check_env.sh"
@@ -28,7 +241,6 @@ DEVICE_PORT="2222"
 PORT_EXPLICIT=0
 IC_INFO=""
 MESSAGE_PARTS=()
-ORIG_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -50,6 +262,7 @@ Commands:
   patch-device  Apply/refresh live userland patches over SSH (optional --ic-info).
   message       Send a direct bug report, result, or thank-you message to Yigit (I read them!).
   messages      View your sent messages and check for developer replies.
+  version       Show installed version and latest GitHub version without updating.
   update        Check GitHub and update yigitzra1n in place (supports both git and ZIP installs).
   clean         Remove build/ artifacts on your Mac (keeps ipsw/ and .cache/; does not touch device).
 
@@ -122,10 +335,21 @@ run_self_update() {
   local updater="$ROOT_DIR/scripts/self_update.py"
   [[ -f "$updater" ]] || return 0
   py_bin="$(resolve_update_python 2>/dev/null || true)"
+  if [[ -z "$py_bin" ]] && [[ "$mode" == "version" ]] && command -v python3 >/dev/null 2>&1; then
+    py_bin="python3"
+  fi
   [[ -n "$py_bin" ]] || {
     if [[ "$mode" == "apply" ]]; then
       echo "[ERROR] python3 / Xcode Command Line Tools required for update. Run: xcode-select --install" >&2
       return 1
+    fi
+    if [[ "$mode" == "version" ]]; then
+      local local_ver="unknown"
+      [[ -f "$ROOT_DIR/VERSION" ]] && local_ver="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || echo unknown)"
+      echo "Installed version : $local_ver"
+      echo "Install path      : $ROOT_DIR"
+      echo "Latest version    : unavailable (python3 / Xcode Command Line Tools not installed)"
+      return 0
     fi
     return 0
   }
@@ -135,7 +359,7 @@ run_self_update() {
 
   local upd_rc=0
   "$py_bin" "$updater" "${args[@]}" || upd_rc=$?
-  if [[ "$mode" == "apply" ]]; then
+  if [[ "$mode" == "apply" || "$mode" == "version" ]]; then
     if [[ "$upd_rc" -eq 10 || "$upd_rc" -eq 0 ]]; then
       return 0
     fi
@@ -153,21 +377,28 @@ print_legacy_sileo_notice() {
   cat <<'NOTICE'
 ----------------------------------------------------------------------
   [NOTICE] Updating from an older yigitzra1n version?
-    * Already booted into iOS 16? Run:  ./yigitzra1n.sh sileo
+    * Global CLI enabled: run 'yigitzra1n <command>' from anywhere (no cd needed!).
+    * Already booted into iOS 16? Run:  yigitzra1n sileo
       (Installs Sileo & 5 default repos over USB — no reboot!)
-    * Or run './yigitzra1n.sh boot' as usual — it installs them automatically on boot.
+    * Or run 'yigitzra1n boot' as usual — it installs them automatically on boot.
 ----------------------------------------------------------------------
 NOTICE
 }
 
+if [[ "$CMD" == "version" ]]; then
+  run_self_update "version"
+  exit $?
+fi
+
 if [[ "$CMD" == "update" ]]; then
   run_self_update "apply"
   upd_exit=$?
+  ensure_global_launcher_and_path "$ROOT_DIR" "${YIGITZRA1N_FALLBACK_SRC:-}"
   [[ "$upd_exit" -eq 0 ]] && print_legacy_sileo_notice
   exit "$upd_exit"
 fi
 
-if [[ "$CMD" != "clean" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
+if [[ "$CMD" != "clean" && "$CMD" != "version" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
   run_self_update "auto"
 fi
 
@@ -630,10 +861,12 @@ cmd_prepare() {
   IPSW_DIR="$IPSW_DIR" bash "$ROOT_DIR/scripts/06_build_rootfs.sh"
 
   telemetry_send "install_success" "prepare" "PREPARE_DONE" "yigitzra1n.sh" "$LINENO" 0 "prepared" ""
+  date +%s > "$ROOT_DIR/.yigitzra1n_installed" 2>/dev/null || true
+  ensure_global_launcher_and_path "$ROOT_DIR" "${YIGITZRA1N_FALLBACK_SRC:-}"
   echo ""
   echo "[+] yigitzra1n preparation complete! Everything is verified in $BUILD_DIR."
   echo "    Next step: Ensure your iPhone 6s is on iOS 15.8.8, then run:"
-  echo "      ./yigitzra1n.sh install"
+  echo "      yigitzra1n install"
 }
 
 ensure_patched_engine() {
@@ -875,6 +1108,8 @@ cmd_install() {
     BLOCK_PATH="$boot_blk" cmd_boot
   fi
   telemetry_send "install_success" "install" "INSTALL_DONE" "yigitzra1n.sh" "$LINENO" 0 "installed" ""
+  date +%s > "$ROOT_DIR/.yigitzra1n_installed" 2>/dev/null || true
+  ensure_global_launcher_and_path "$ROOT_DIR" "${YIGITZRA1N_FALLBACK_SRC:-}"
 }
 
 cmd_boot() {

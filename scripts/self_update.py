@@ -15,6 +15,7 @@ import urllib.request
 DEFAULT_REPO_URL = "https://github.com/yigitocak0-sys/yigitzra1n.git"
 DEFAULT_TARBALL_URL = "https://github.com/yigitocak0-sys/yigitzra1n/archive/refs/heads/main.tar.gz"
 DEFAULT_SHA_URL = "https://api.github.com/repos/yigitocak0-sys/yigitzra1n/commits/main"
+DEFAULT_VERSION_URL = "https://raw.githubusercontent.com/yigitocak0-sys/yigitzra1n/main/VERSION"
 DEFAULT_BRANCH = "main"
 
 PRESERVE_TOP = {
@@ -28,6 +29,8 @@ PRESERVE_TOP = {
     ".DS_Store",
     ".yigitzra1n_init",
     ".yigitzra1n_commit",
+    ".yigitzra1n_installed",
+    ".yigitzra1n_source_dir",
 }
 
 EXIT_OK = 0
@@ -386,10 +389,106 @@ def update_zip_install(
         return EXIT_UPDATED
 
 
+def get_remote_version(version_url: str, timeout: int) -> str:
+    req = urllib.request.Request(
+        version_url,
+        headers={
+            "User-Agent": "yigitzra1n-updater",
+            "Cache-Control": "no-cache",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            val = resp.read().decode("utf-8", errors="ignore").strip()
+            if val and len(val) <= 32 and "\n" not in val:
+                return val
+    except Exception:
+        pass
+    if shutil.which("curl"):
+        try:
+            r = run_cmd(
+                [
+                    "curl",
+                    "-fsSL",
+                    "--connect-timeout",
+                    str(timeout),
+                    "--max-time",
+                    str(max(timeout, 10)),
+                    "-A",
+                    "yigitzra1n-updater",
+                    version_url,
+                ],
+                timeout=max(timeout + 2, 12),
+            )
+            val = r.stdout.strip()
+            if r.returncode == 0 and val and len(val) <= 32 and "\n" not in val:
+                return val
+        except Exception:
+            pass
+    return ""
+
+
+def get_local_version_info(root: pathlib.Path) -> tuple:
+    ver_file = root / "VERSION"
+    local_ver = ver_file.read_text(encoding="utf-8", errors="ignore").strip() if ver_file.is_file() else "unknown"
+    local_sha = ""
+    if (root / ".git").exists() and has_working_git():
+        r = run_cmd(["git", "rev-parse", "HEAD"], cwd=root, timeout=5)
+        if r.returncode == 0:
+            local_sha = r.stdout.strip().lower()
+    if not local_sha:
+        cf = root / ".yigitzra1n_commit"
+        if cf.is_file():
+            local_sha = cf.read_text(encoding="utf-8", errors="ignore").strip().lower()
+    return local_ver, local_sha
+
+
+def show_version(
+    root: pathlib.Path,
+    repo_url: str,
+    sha_url: str,
+    version_url: str,
+    branch: str,
+    timeout: int,
+) -> int:
+    local_ver, local_sha = get_local_version_info(root)
+    remote_sha = get_remote_sha(repo_url, sha_url, branch, timeout)
+    remote_ver = get_remote_version(version_url, timeout)
+
+    local_label = f"{local_ver} ({local_sha[:7]})" if local_sha else local_ver
+    print(f"Installed version : {local_label}")
+    print(f"Install path      : {root}")
+
+    if not remote_sha and not remote_ver:
+        print("Latest version    : unavailable (offline or GitHub unreachable)")
+        return EXIT_OK
+
+    latest_ver = remote_ver or local_ver
+    latest_label = f"{latest_ver} ({remote_sha[:7]})" if remote_sha else latest_ver
+    print(f"Latest version    : {latest_label}")
+
+    if remote_sha and local_sha and remote_sha == local_sha and (not remote_ver or local_ver == remote_ver):
+        print("Status            : Up to date.")
+    elif remote_ver and local_ver != remote_ver:
+        print("Status            : Update available! Run 'yigitzra1n update' to update.")
+    elif remote_sha and local_sha and remote_sha != local_sha:
+        if (root / ".git").exists() and has_working_git():
+            ahead_r = run_cmd(["git", "rev-list", "--count", "HEAD"], cwd=root, timeout=5)
+            # Check locally known relation without modifying working tree
+            status_r = run_cmd(["git", "branch", "-vv"], cwd=root, timeout=5)
+            if status_r.returncode == 0 and "[origin/" in status_r.stdout and "ahead " in status_r.stdout:
+                print("Status            : Local repo has unpushed/newer commits than GitHub.")
+                return EXIT_OK
+        print("Status            : Newer commit available on GitHub! Run 'yigitzra1n update' to update.")
+    else:
+        print("Status            : Up to date.")
+    return EXIT_OK
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--mode", choices=["auto", "check", "apply"], default="auto")
+    ap.add_argument("--mode", choices=["auto", "check", "apply", "version"], default="auto")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
 
@@ -397,11 +496,15 @@ def main() -> int:
     repo_url = os.environ.get("YIGITZRA1N_UPDATE_REPO_URL", DEFAULT_REPO_URL)
     tarball_url = os.environ.get("YIGITZRA1N_UPDATE_TARBALL_URL", DEFAULT_TARBALL_URL)
     sha_url = os.environ.get("YIGITZRA1N_UPDATE_SHA_URL", DEFAULT_SHA_URL)
+    version_url = os.environ.get("YIGITZRA1N_VERSION_URL", DEFAULT_VERSION_URL)
     branch = os.environ.get("YIGITZRA1N_UPDATE_BRANCH", DEFAULT_BRANCH)
     try:
         timeout = int(os.environ.get("YIGITZRA1N_UPDATE_TIMEOUT", "6"))
     except ValueError:
         timeout = 6
+
+    if args.mode == "version":
+        return show_version(root, repo_url, sha_url, version_url, branch, timeout)
 
     explicit = args.mode == "apply"
     check_only = args.mode == "check"
