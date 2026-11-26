@@ -13,10 +13,28 @@ SILEO_WAIT_TRIES="${SILEO_WAIT_TRIES:-75}"
 PY_BIN="$ROOT_DIR/.venv/bin/python3"
 [[ -x "$PY_BIN" ]] || PY_BIN="$(command -v python3)"
 
+if [[ -f "$ROOT_DIR/scripts/telemetry.sh" ]]; then
+  # shellcheck source=scripts/telemetry.sh
+  source "$ROOT_DIR/scripts/telemetry.sh"
+fi
+
+report_sileo_fail() {
+  local line="${1:-0}"
+  local rc="${2:-1}"
+  local reason="${3:-sileo_failed}"
+  local msg="${4:-}"
+  if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]] && command -v telemetry_send >/dev/null 2>&1; then
+    telemetry_was_reported && return 0
+    telemetry_mark_reported
+    telemetry_send "install_fail" "${TELEMETRY_CMD:-sileo}" "SILEO" "provision_sileo.sh" "$line" "$rc" "$reason" "$msg"
+  fi
+}
+
 for req in sshpass ssh lsof tar codesign; do
   if ! command -v "$req" >/dev/null 2>&1; then
     if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
       echo "[ERROR] Missing required host tool: '$req'." >&2
+      report_sileo_fail "$LINENO" 1 "missing_host_tool" "Missing host tool: $req"
       exit 1
     fi
     echo "[!] Sileo auto-install skipped: missing '$req'." >&2
@@ -80,7 +98,7 @@ start_iproxy_for_udid() {
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no -o PreferredAuthentications=password -o ConnectTimeout=3 -p "$DEVICE_PORT")
 run_ssh() { sshpass -p "$SSH_PASS" ssh "${SSH_OPTS[@]}" "root@${DEVICE_HOST}" "$@"; }
 
-echo "[*] Waiting for iOS SSH to check/install Sileo, repos & status bar (Ctrl+C to skip)..."
+echo "[*] Waiting for iOS SSH to check/install Sileo & default repos (Ctrl+C to skip)..."
 ssh_ready=0
 TARGET_UDID=""
 for (( _try=1; _try<=SILEO_WAIT_TRIES; _try++ )); do
@@ -104,6 +122,7 @@ done
 if [[ "$ssh_ready" -ne 1 ]]; then
   if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
     echo "[ERROR] Device SSH did not answer within $((SILEO_WAIT_TRIES * 2))s. Make sure your iPhone 6s is booted into iOS 16 and connected via USB." >&2
+    report_sileo_fail "$LINENO" 1 "sileo_ssh_timeout" "Device SSH did not answer within $((SILEO_WAIT_TRIES * 2))s"
     exit 1
   fi
   echo "[!] Device SSH did not answer within $((SILEO_WAIT_TRIES * 2))s — Sileo check skipped (non-fatal)." >&2
@@ -127,19 +146,24 @@ if run_ssh '
   [ "$(wc -c < /private/var/mobile/Library/SpringBoard/statusBarOverrides 2>/dev/null | tr -d " ")" = "3944" ] &&
   [ "$(stat -c "%u" /var/jb/var/mobile 2>/dev/null || stat -f "%u" /var/jb/var/mobile 2>/dev/null)" = "501" ] &&
   grep -qa "com.apple.private.security.no-sandbox" /Applications/Sileo.app/Sileo 2>/dev/null &&
-  grep -q "^Package: org.coolstar.sileo$" /var/jb/Library/dpkg/status 2>/dev/null
+  grep -q "^Package: org.coolstar.sileo$" /var/jb/Library/dpkg/status 2>/dev/null &&
+  test -d /private/var/jb/var/lib/apt/sileolists/partial &&
+  test -s /private/var/jb/var/lib/apt/lists/apt.thebigboss.org_repofiles_cydia_dists_stable_main_binary-iphoneos-arm64_Packages &&
+  test -s /private/var/jb/var/lib/apt/sileolists/apt.thebigboss.org_repofiles_cydia_dists_stable_main_binary-iphoneos-arm64_Packages &&
+  test -s /private/var/jb/var/lib/apt/sileolists/repo.chariz.com_._Packages
 ' >/dev/null 2>&1; then
   already_ok=1
 fi
 
 if [[ "$already_ok" -eq 1 ]]; then
-  echo "[+] Sileo, default repos & yigitzra1n status bar already installed."
+  echo "[+] Sileo & default repos already installed."
   exit 0
 fi
 
 if ! run_ssh '[ -L /var ] || [ ! -e /var ]'; then
   if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
     echo "[!] Device /var is not a symlink (expected /var -> private/var). Repair /var via ssh-ramdisk before provisioning Sileo." >&2
+    report_sileo_fail "$LINENO" 1 "sileo_var_not_symlink" "Device /var is not a symlink"
     exit 1
   fi
   echo "[!] Device /var check failed — Sileo setup skipped (non-fatal)." >&2
@@ -148,7 +172,18 @@ fi
 
 find_latest_deb() {
   local pat="$1"
-  find "$PROCURSUS_DIR/debs" -maxdepth 1 -type f -name "$pat" 2>/dev/null | sort -V | tail -n 1 || true
+  "$PY_BIN" - "$PROCURSUS_DIR/debs" "$pat" <<'PY' 2>/dev/null || true
+import fnmatch, os, re, sys
+debs_dir, pat = sys.argv[1], sys.argv[2]
+if not os.path.isdir(debs_dir):
+    sys.exit(0)
+matches = [f for f in os.listdir(debs_dir) if fnmatch.fnmatch(f, pat) and os.path.isfile(os.path.join(debs_dir, f))]
+if not matches:
+    sys.exit(0)
+def key_fn(name):
+    return [(0, int(p)) if p.isdigit() else (1, p) for p in re.split(r"(\d+)", name)]
+print(os.path.join(debs_dir, sorted(matches, key=key_fn)[-1]))
+PY
 }
 
 UK_DEB="$(find_latest_deb 'uikittools_*.deb')"
@@ -159,6 +194,7 @@ if [[ -z "$UK_DEB" || -z "$SILEO_DEB" || ! -f "$PROCURSUS_DIR/bootstrap-iphoneos
     --cache-dir "$PROCURSUS_DIR" \
     --packages uikittools org.coolstar.sileo; then
     if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
+      report_sileo_fail "$LINENO" 1 "sileo_deb_fetch_failed" "Failed to download Sileo/uikittools packages from Procursus"
       exit 1
     fi
     echo "[!] Could not download Sileo packages (offline/network error) — skipped (non-fatal)." >&2
@@ -171,6 +207,7 @@ fi
 if [[ -z "$UK_DEB" || -z "$SILEO_DEB" ]]; then
   if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
     echo "[!] Could not locate Sileo or uikittools .deb in $PROCURSUS_DIR/debs." >&2
+    report_sileo_fail "$LINENO" 1 "sileo_deb_missing" "Missing Sileo or uikittools .deb after fetch"
     exit 1
   fi
   echo "[!] Sileo or uikittools .deb unavailable — skipped (non-fatal)." >&2
@@ -224,6 +261,7 @@ if ! "$PY_BIN" "$ROOT_DIR/scripts/stage_procursus_debs.py" \
   --deb "$SILEO_DEB" \
   --skip-users; then
   if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
+    report_sileo_fail "$LINENO" 1 "sileo_stage_failed" "stage_procursus_debs.py failed"
     exit 1
   fi
   echo "[!] Sileo package staging failed — skipped (non-fatal)." >&2
@@ -259,8 +297,103 @@ if [[ -f "$ROOT_DIR/scripts/build_statusbar_overrides.py" ]]; then
     --out "$STAGE_JB/tmp/yigitzra1n_statusBarOverrides" 2>/dev/null || true
 fi
 
-echo "[*] Installing Sileo, default repos & yigitzra1n status bar on device..."
-COPYFILE_DISABLE=1 tar -C "$STAGE_APP" --no-xattrs -cf - Sileo.app | run_ssh '
+# Best-effort pre-seed APT lists (Havoc, Chariz, ElleKit, opa334, BigBoss, Procursus) so Sileo never fails with missing _Packages
+"$PY_BIN" - "$PROCURSUS_DIR/apt_lists" "$STAGE_JB/tmp/apt_lists_seed" <<'PY' 2>/dev/null || true
+import bz2, gzip, lzma, pathlib, shutil, subprocess, sys, time
+
+cache_dir = pathlib.Path(sys.argv[1])
+out_dir = pathlib.Path(sys.argv[2])
+cache_dir.mkdir(parents=True, exist_ok=True)
+out_dir.mkdir(parents=True, exist_ok=True)
+
+MAX_AGE = 6 * 3600
+now = time.time()
+UA = "Telesphoreo APT-HTTP/1.0.592"
+
+def fetch_bytes(url, timeout=6):
+    try:
+        p = subprocess.run(
+            ["curl", "-fsSL", "--connect-timeout", "3", "--max-time", str(timeout), "-A", UA, url],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout + 2,
+        )
+        if p.returncode == 0 and p.stdout:
+            return p.stdout
+    except Exception:
+        pass
+    return None
+
+def decompress(raw, ext):
+    try:
+        if ext == "":
+            return raw
+        if ext == ".bz2":
+            return bz2.decompress(raw)
+        if ext == ".gz":
+            return gzip.decompress(raw)
+        if ext == ".xz":
+            return lzma.decompress(raw)
+        if ext == ".zst":
+            p = subprocess.run(["zstd", "-dc"], input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+            return p.stdout if p.returncode == 0 and p.stdout else None
+    except Exception:
+        return None
+    return None
+
+def ensure_file(name, candidates, timeout=6):
+    cp = cache_dir / name
+    if cp.is_file() and cp.stat().st_size > 0 and (now - cp.stat().st_mtime) < MAX_AGE:
+        shutil.copy2(cp, out_dir / name)
+        return
+    for url, ext in candidates:
+        raw = fetch_bytes(url, timeout=timeout)
+        if not raw:
+            continue
+        data = decompress(raw, ext)
+        if data and len(data) > 0:
+            tmp = cp.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(cp)
+            shutil.copy2(cp, out_dir / name)
+            return
+    if cp.is_file() and cp.stat().st_size > 0:
+        shutil.copy2(cp, out_dir / name)
+
+PKG_EXTS = [".zst", ".xz", ".bz2", ".gz", ""]
+ensure_file("havoc.app_._Release", [("https://havoc.app/Release", "")])
+ensure_file("havoc.app_._Release.gpg", [("https://havoc.app/Release.gpg", "")])
+ensure_file("havoc.app_._Packages", [("https://havoc.app/Packages" + e, e) for e in PKG_EXTS], timeout=10)
+
+ensure_file("repo.chariz.com_._Release", [("https://repo.chariz.com/Release", "")])
+ensure_file("repo.chariz.com_._Release.gpg", [("https://repo.chariz.com/Release.gpg", "")])
+ensure_file("repo.chariz.com_._Packages", [("https://repo.chariz.com/Packages" + e, e) for e in PKG_EXTS], timeout=10)
+
+ensure_file("ellekit.space_._Release", [("https://ellekit.space/Release", "")])
+ensure_file("ellekit.space_._Packages", [("https://ellekit.space/Packages" + e, e) for e in PKG_EXTS])
+
+ensure_file("opa334.github.io_._Release", [("https://opa334.github.io/Release", "")])
+ensure_file("opa334.github.io_._Packages", [("https://opa334.github.io/Packages" + e, e) for e in PKG_EXTS])
+
+ensure_file("apt.thebigboss.org_repofiles_cydia_dists_stable_Release", [("http://apt.thebigboss.org/repofiles/cydia/dists/stable/Release", "")])
+ensure_file("apt.thebigboss.org_repofiles_cydia_dists_stable_Release.gpg", [("http://apt.thebigboss.org/repofiles/cydia/dists/stable/Release.gpg", "")])
+ensure_file(
+    "apt.thebigboss.org_repofiles_cydia_dists_stable_main_binary-iphoneos-arm64_Packages",
+    [("http://apt.thebigboss.org/repofiles/cydia/dists/stable/main/binary-iphoneos-arm64/Packages" + e, e) for e in [".bz2", ".gz", ""]],
+)
+
+ensure_file("apt.procurs.us_dists_1900_InRelease", [("https://apt.procurs.us/dists/1900/InRelease", "")])
+ensure_file(
+    "apt.procurs.us_dists_1900_main_binary-iphoneos-arm64_Packages",
+    [("https://apt.procurs.us/dists/1900/main/binary-iphoneos-arm64/Packages" + e, e) for e in PKG_EXTS],
+    timeout=10,
+)
+PY
+
+echo "[*] Installing Sileo & default repos on device..."
+SSH_ERR_LOG="$WORK_TMP/ssh_err.log"
+ssh_rc=0
+( COPYFILE_DISABLE=1 tar -C "$STAGE_APP" --no-xattrs -cf - Sileo.app | run_ssh '
   set -e
   export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   /sbin/mount -uw / 2>/dev/null || true
@@ -273,9 +406,20 @@ COPYFILE_DISABLE=1 tar -C "$STAGE_APP" --no-xattrs -cf - Sileo.app | run_ssh '
     chown root:wheel /Applications/Sileo.app/giveMeRoot
     chmod 4755 /Applications/Sileo.app/giveMeRoot
   fi
-'
+' ) 2>"$SSH_ERR_LOG" || ssh_rc=$?
+if [[ "$ssh_rc" -ne 0 ]]; then
+  cat "$SSH_ERR_LOG" >&2 || true
+  err_tail="$(tr '\n' ' ' < "$SSH_ERR_LOG" | tail -c 400 || true)"
+  if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
+    report_sileo_fail "$LINENO" "$ssh_rc" "sileo_app_transfer_failed" "${err_tail:-Sileo.app SSH transfer failed (rc=$ssh_rc)}"
+    exit "$ssh_rc"
+  fi
+  echo "[!] Sileo transfer failed — skipped (non-fatal)." >&2
+  exit 0
+fi
 
-COPYFILE_DISABLE=1 tar -C "$STAGE_JB" --no-xattrs -cf - . | run_ssh '
+ssh_rc=0
+( COPYFILE_DISABLE=1 tar -C "$STAGE_JB" --no-xattrs -cf - . | run_ssh '
   set -e
   export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   need_sbreload=0
@@ -395,6 +539,33 @@ ${ln}"
     : > /private/var/jb/.yigitzra1n_repos_v2_ready
   fi
 
+  # Seed APT lists & sileolists (mobile-writable mirror) so Sileo never fails with missing _Packages
+  mkdir -p /private/var/jb/var/lib/apt/lists/partial /private/var/jb/var/lib/apt/sileolists/partial
+  SEED_LISTS="/private/var/jb/tmp/apt_lists_seed"
+  if [ -d "$SEED_LISTS" ]; then
+    for sf in "$SEED_LISTS"/*; do
+      [ -f "$sf" ] || continue
+      bn="$(basename "$sf")"
+      if [ ! -s "/private/var/jb/var/lib/apt/lists/$bn" ]; then
+        cp -f "$sf" "/private/var/jb/var/lib/apt/lists/$bn"
+      fi
+    done
+    rm -rf "$SEED_LISTS"
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5 -o Acquire::Retries=1 >/dev/null 2>&1 || true
+  fi
+  for lf in /private/var/jb/var/lib/apt/lists/*; do
+    [ -f "$lf" ] || continue
+    case "$(basename "$lf")" in
+      lock) continue ;;
+    esac
+    chmod 644 "$lf" 2>/dev/null || true
+    cp -f "$lf" "/private/var/jb/var/lib/apt/sileolists/$(basename "$lf")" 2>/dev/null || true
+  done
+  chown -R mobile:mobile /private/var/jb/var/lib/apt/sileolists 2>/dev/null || chown -R 501:501 /private/var/jb/var/lib/apt/sileolists 2>/dev/null || true
+  chmod 755 /private/var/jb/var/lib/apt/lists /private/var/jb/var/lib/apt/sileolists /private/var/jb/var/lib/apt/sileolists/partial 2>/dev/null || true
+
   # Update ios16_sshd_launcher & start yigitzra1n_gmr root helper daemon if needed
   SSH_L_STAGE="/private/var/jb/tmp/yigitzra1n_sshd_launcher"
   if [ -f "$SSH_L_STAGE" ]; then
@@ -441,5 +612,15 @@ ${ln}"
     /var/jb/usr/bin/sbreload >/dev/null 2>&1 || true
   fi
   sync
-'
-echo "[+] Sileo, default repos & yigitzra1n status bar ready on device."
+' ) 2>"$SSH_ERR_LOG" || ssh_rc=$?
+if [[ "$ssh_rc" -ne 0 ]]; then
+  cat "$SSH_ERR_LOG" >&2 || true
+  err_tail="$(tr '\n' ' ' < "$SSH_ERR_LOG" | tail -c 400 || true)"
+  if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
+    report_sileo_fail "$LINENO" "$ssh_rc" "sileo_jb_provision_failed" "${err_tail:-Sileo SSH provision failed (rc=$ssh_rc)}"
+    exit "$ssh_rc"
+  fi
+  echo "[!] Sileo device setup failed — skipped (non-fatal)." >&2
+  exit 0
+fi
+echo "[+] Sileo & default repos ready on device."

@@ -533,6 +533,9 @@ SRCS
     chmod 644 "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources"
     : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_ready"
     : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_v2_ready"
+    mkdir -p "$MNT_R16/usr/local/procursus/var/lib/apt/lists/partial" "$MNT_R16/usr/local/procursus/var/lib/apt/sileolists/partial"
+    chown -R 501:501 "$MNT_R16/usr/local/procursus/var/lib/apt/sileolists"
+    chmod 755 "$MNT_R16/usr/local/procursus/var/lib/apt/lists" "$MNT_R16/usr/local/procursus/var/lib/apt/sileolists" "$MNT_R16/usr/local/procursus/var/lib/apt/sileolists/partial"
     chown -R 501:501 "$MNT_R16/usr/local/procursus/var/mobile"
     chmod 755 "$MNT_R16/usr/local/procursus/var/mobile" "$MNT_R16/usr/local/procursus/var/mobile/Library" "$MNT_R16/usr/local/procursus/var/mobile/Library/Caches" "$MNT_R16/usr/local/procursus/var/mobile/Library/Preferences"
     chmod 600 "$MNT_R16/usr/local/procursus/etc/master.passwd" 2>/dev/null || true

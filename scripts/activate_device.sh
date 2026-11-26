@@ -290,7 +290,7 @@ echo "[4/4] Finalizing setup & restarting SpringBoard..."
       chown mobile:mobile /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp 2>/dev/null || chown 501:501 /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp 2>/dev/null || true
       chmod 644 /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp
       mv -f /private/var/mobile/Library/SpringBoard/statusBarOverrides.tmp /private/var/mobile/Library/SpringBoard/statusBarOverrides
-    ' < "$sb_file" 2>/dev/null || echo "[!] Non-fatal status bar override step skipped." >&2
+    ' < "$sb_file" >/dev/null 2>&1 || true
   fi
 ) || true
 

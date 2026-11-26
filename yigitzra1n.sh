@@ -41,8 +41,8 @@ Commands:
                 and build all patched images (kernel v6, DeviceTree v5, RamDisks, Hybrid RootFS).
   install       Interactive guided restore & permanent boot-block setup (prompts for DFU mode).
   boot          Tethered boot an installed iPhone 6s into iOS 16.7.16 (verbose logs + centered
-                yigitzra1n logo by default; auto-installs Sileo, repos & status bar; --quiet hides text).
-  sileo         Install/update Sileo, default repos & yigitzra1n status bar over USB SSH (no reboot needed).
+                yigitzra1n logo by default; auto-installs Sileo & default repos; --quiet hides text).
+  sileo         Install/update Sileo & default repos over USB SSH (no reboot needed).
   ssh-ramdisk   Boot the maintenance OpenSSH RamDisk (port 22 over USB via iproxy).
   uninstall     Reset the unencrypted iOS 16 APFS container (/dev/disk0s1) via SSH RamDisk so
                 stock iOS 15.8.8 restores cleanly without iTunes/Finder Error 9.
@@ -154,7 +154,7 @@ print_legacy_sileo_notice() {
 ----------------------------------------------------------------------
   [NOTICE] Updating from an older yigitzra1n version?
     * Already booted into iOS 16? Run:  ./yigitzra1n.sh sileo
-      (Installs Sileo, 5 default repos & the 'yigitzra1n' status bar over USB — no reboot!)
+      (Installs Sileo & 5 default repos over USB — no reboot!)
     * Or run './yigitzra1n.sh boot' as usual — it installs them automatically on boot.
 ----------------------------------------------------------------------
 NOTICE
@@ -1195,6 +1195,7 @@ cmd_sileo() {
   [[ "$PORT_EXPLICIT" -eq 1 ]] && sileo_port="$DEVICE_PORT"
   SILEO_REQUIRE_SSH=1 DEVICE_HOST="$DEVICE_HOST" DEVICE_PORT="$sileo_port" PROCURSUS_DIR="$PROCURSUS_DIR" \
     bash "$ROOT_DIR/scripts/provision_sileo.sh"
+  telemetry_send "install_success" "sileo" "SILEO_DONE" "yigitzra1n.sh" "$LINENO" 0 "sileo_ready" ""
 }
 
 cmd_message() {
