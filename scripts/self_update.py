@@ -453,7 +453,12 @@ def show_version(
 ) -> int:
     local_ver, local_sha = get_local_version_info(root)
     remote_sha = get_remote_sha(repo_url, sha_url, branch, timeout)
-    remote_ver = get_remote_version(version_url, timeout)
+    effective_ver_url = version_url
+    if remote_sha and "YIGITZRA1N_VERSION_URL" not in os.environ and version_url == DEFAULT_VERSION_URL:
+        effective_ver_url = f"https://raw.githubusercontent.com/yigitocak0-sys/yigitzra1n/{remote_sha}/VERSION"
+    remote_ver = get_remote_version(effective_ver_url, timeout)
+    if not remote_ver and effective_ver_url != version_url:
+        remote_ver = get_remote_version(version_url, timeout)
 
     local_label = f"{local_ver} ({local_sha[:7]})" if local_sha else local_ver
     print(f"Installed version : {local_label}")
@@ -467,7 +472,7 @@ def show_version(
     latest_label = f"{latest_ver} ({remote_sha[:7]})" if remote_sha else latest_ver
     print(f"Latest version    : {latest_label}")
 
-    if remote_sha and local_sha and remote_sha == local_sha and (not remote_ver or local_ver == remote_ver):
+    if remote_sha and local_sha and remote_sha == local_sha:
         print("Status            : Up to date.")
     elif remote_ver and local_ver != remote_ver:
         print("Status            : Update available! Run 'yigitzra1n update' to update.")
