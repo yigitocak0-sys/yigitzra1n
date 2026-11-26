@@ -140,8 +140,10 @@ if run_ssh '
   test -f /private/var/jb/.yigitzra1n_fw_ready &&
   test -f /private/var/jb/.yigitzra1n_repos_v2_ready &&
   test -S /var/run/yigitzra1n_gmr.sock &&
-  grep -qa "yigitzra1n_gmr_v2" /Applications/Sileo.app/giveMeRoot 2>/dev/null &&
-  grep -qa "yigitzra1n_gmr_daemon_v3" /usr/local/libexec/ios16_sshd_launcher 2>/dev/null &&
+  grep -qa "yigitzra1n_gmr_v3" /Applications/Sileo.app/giveMeRoot 2>/dev/null &&
+  grep -qa "yigitzra1n_gmr_daemon_v4" /usr/local/libexec/ios16_sshd_launcher 2>/dev/null &&
+  test -L /usr/bin/dpkg-deb &&
+  ! grep -q "Pin-Priority: 1001" /private/var/jb/etc/apt/preferences.d/procursus 2>/dev/null &&
   test -f /private/var/mobile/Library/SpringBoard/statusBarOverrides &&
   [ "$(wc -c < /private/var/mobile/Library/SpringBoard/statusBarOverrides 2>/dev/null | tr -d " ")" = "3944" ] &&
   [ "$(stat -c "%u" /var/jb/var/mobile 2>/dev/null || stat -f "%u" /var/jb/var/mobile 2>/dev/null)" = "501" ] &&
@@ -225,10 +227,10 @@ ensure_gmr_binaries() {
   local sshd_bin="$bin_dir/ios16_sshd_launcher"
   local need_gmr=0 need_sshd=0
 
-  if [[ ! -x "$gmr_bin" || "$ROOT_DIR/src/yigitzra1n_givemeroot.c" -nt "$gmr_bin" ]] || ! grep -qa "yigitzra1n_gmr_v2" "$gmr_bin" 2>/dev/null; then
+  if [[ ! -x "$gmr_bin" || "$ROOT_DIR/src/yigitzra1n_givemeroot.c" -nt "$gmr_bin" ]] || ! grep -qa "yigitzra1n_gmr_v3" "$gmr_bin" 2>/dev/null; then
     need_gmr=1
   fi
-  if [[ ! -x "$sshd_bin" || "$ROOT_DIR/src/ios16_sshd_launcher.c" -nt "$sshd_bin" ]] || ! grep -qa "yigitzra1n_gmr_daemon_v3" "$sshd_bin" 2>/dev/null; then
+  if [[ ! -x "$sshd_bin" || "$ROOT_DIR/src/ios16_sshd_launcher.c" -nt "$sshd_bin" ]] || ! grep -qa "yigitzra1n_gmr_daemon_v4" "$sshd_bin" 2>/dev/null; then
     need_sshd=1
   fi
   if [[ "$need_gmr" -eq 0 && "$need_sshd" -eq 0 ]]; then
@@ -440,7 +442,7 @@ ssh_rc=0
   tar --no-same-owner -m -C /private/var/jb -xf -
   chown -R root:wheel /private/var/jb/Applications/Sileo.app /private/var/jb/Library/dpkg/info 2>/dev/null || true
 
-  for tool in uicache sbreload; do
+  for tool in uicache sbreload dpkg-deb apt-key apt-mark; do
     [ -x "/var/jb/usr/bin/$tool" ] && ln -sf "/var/jb/usr/bin/$tool" "/usr/bin/$tool" || true
   done
 
@@ -531,9 +533,13 @@ ${ln}"
       repo_comp="$3"
       repo_trusted="$4"
       if ! grep -qF "$repo_uri" "$SOURCES_FILE" 2>/dev/null; then
-        [ -s "$SOURCES_FILE" ] && printf "\n" >> "$SOURCES_FILE"
+        if [ -s "$SOURCES_FILE" ]; then
+          printf "\n" >> "$SOURCES_FILE"
+        fi
         printf "Types: deb\nURIs: %s\nSuites: %s\nComponents:%s\n" "$repo_uri" "$repo_suite" "$repo_comp" >> "$SOURCES_FILE"
-        [ "$repo_trusted" = "1" ] && printf "Trusted: yes\n" >> "$SOURCES_FILE"
+        if [ "$repo_trusted" = "1" ]; then
+          printf "Trusted: yes\n" >> "$SOURCES_FILE"
+        fi
       fi
     }
     append_repo_stanza "https://havoc.app/" "./" "" 0
@@ -545,6 +551,12 @@ ${ln}"
     chmod 644 "$SOURCES_FILE"
     : > /private/var/jb/.yigitzra1n_repos_ready
     : > /private/var/jb/.yigitzra1n_repos_v2_ready
+  fi
+
+  # Prevent Procursus Pin-Priority 1001 from forcing shell-cmds downgrade (309 -> 278-2) on Sileo Upgrade All
+  PREF_PROCURSUS="/private/var/jb/etc/apt/preferences.d/procursus"
+  if [ -f "$PREF_PROCURSUS" ] && grep -q "Pin-Priority: 1001" "$PREF_PROCURSUS" 2>/dev/null; then
+    sed "s/Pin-Priority: 1001/Pin-Priority: 500/" "$PREF_PROCURSUS" > "${PREF_PROCURSUS}.tmp" && mv -f "${PREF_PROCURSUS}.tmp" "$PREF_PROCURSUS"
   fi
 
   # Seed APT lists & sileolists (mobile-writable mirror) so Sileo never fails with missing _Packages

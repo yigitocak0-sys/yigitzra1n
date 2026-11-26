@@ -531,6 +531,9 @@ Trusted: yes
 SRCS
     chown root:wheel "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources"
     chmod 644 "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources"
+    if [[ -f "$MNT_R16/usr/local/procursus/etc/apt/preferences.d/procursus" ]]; then
+      sed -i '' 's/Pin-Priority: 1001/Pin-Priority: 500/' "$MNT_R16/usr/local/procursus/etc/apt/preferences.d/procursus" 2>/dev/null || true
+    fi
     : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_ready"
     : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_v2_ready"
     mkdir -p "$MNT_R16/usr/local/procursus/var/lib/apt/lists/partial" "$MNT_R16/usr/local/procursus/var/lib/apt/sileolists/partial" "$MNT_R16/usr/local/procursus/var/cache/apt/archives/partial" "$MNT_R16/usr/local/procursus/var/tmp"
@@ -546,7 +549,7 @@ SRCS
     ln -sf "/var/jb/usr/bin/bash" "$MNT_R16/bin/bash"
     ln -sf "/var/jb/usr/libexec/sftp-server" "$MNT_R16/usr/libexec/sftp-server"
     ln -sfn "/var/jb/etc/apt" "$MNT_R16/private/etc/apt"
-    for tool in env apt apt-get apt-cache dpkg plutil uicache sbreload; do
+    for tool in env apt apt-get apt-cache apt-key apt-mark dpkg dpkg-deb plutil uicache sbreload; do
       [[ -e "$MNT_R16/usr/bin/$tool" ]] || ln -sf "/var/jb/usr/bin/$tool" "$MNT_R16/usr/bin/$tool"
     done
     cat > "$MNT_R16/private/etc/profile" <<'PROF'

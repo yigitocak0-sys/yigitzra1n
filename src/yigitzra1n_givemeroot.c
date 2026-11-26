@@ -20,9 +20,10 @@ extern char **environ;
 #define GMR_SOCK_PATH "/var/run/yigitzra1n_gmr.sock"
 #define GMR_MAX_ARGS 256
 #define GMR_MAX_ENV  256
-#define GMR_MAX_FDS  32
+#define GMR_MAX_FDS  64
+#define GMR_SCAN_FDS 512
 
-static const char GMR_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_v2";
+static const char GMR_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_v3";
 
 static int write_all(int fd, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
@@ -132,7 +133,7 @@ int main(int argc, char **argv) {
     int pass_fds[GMR_MAX_FDS];
     int32_t pass_nums[GMR_MAX_FDS];
     uint32_t fd_count = 0;
-    for (int fd = 0; fd < GMR_MAX_FDS; fd++) {
+    for (int fd = 0; fd < GMR_SCAN_FDS && fd_count < GMR_MAX_FDS; fd++) {
         if (fd == sock) continue;
         int flags = fcntl(fd, F_GETFD);
         if (flags == -1) continue;

@@ -26,13 +26,15 @@ extern char **environ;
 
 #define GMR_SOCK_PATH "/var/run/yigitzra1n_gmr.sock"
 #define GMR_PID_PATH  "/var/run/yigitzra1n_gmr.pid"
+#define GMR_LOG_PATH  "/var/jb/var/log/yigitzra1n_gmr.log"
 #define GMR_MAX_ARGS  256
 #define GMR_MAX_ENV   256
 #define GMR_MAX_STR   65536
-#define GMR_MAX_FDS   32
+#define GMR_MAX_FDS   64
+#define GMR_SCAN_FDS  512
 #define GMR_DEFAULT_PATH "/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-static const char GMR_DAEMON_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_daemon_v3";
+static const char GMR_DAEMON_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_daemon_v4";
 
 static void mkdir_p(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
@@ -48,6 +50,29 @@ static void mkdir_p(const char *path, mode_t mode) {
         }
     }
     mkdir(tmp, mode);
+}
+
+static void gmr_log_exec(const char *cmd, const char *arg1, uint32_t fd_count, int32_t rc) {
+    mkdir_p("/var/jb/var/log", 0755);
+    struct stat st;
+    int flags = O_WRONLY | O_CREAT | O_APPEND;
+    if (stat(GMR_LOG_PATH, &st) == 0 && st.st_size > 32768) {
+        flags = O_WRONLY | O_CREAT | O_TRUNC;
+    }
+    int lfd = open(GMR_LOG_PATH, flags, 0644);
+    if (lfd < 0) return;
+    char line[512];
+    int n = snprintf(
+        line,
+        sizeof(line),
+        "gmr fds=%u cmd=%s %s rc=%d\n",
+        (unsigned)fd_count,
+        cmd ? cmd : "-",
+        arg1 ? arg1 : "-",
+        (int)rc
+    );
+    if (n > 0) (void)write(lfd, line, (size_t)n);
+    close(lfd);
 }
 
 static int run_cmd(const char *prog, char *const argv[]) {
@@ -268,7 +293,7 @@ static void gmr_handle_client(int cfd) {
         return;
     }
     for (uint32_t i = 0; i < fd_count; i++) {
-        if (recv_fds[i] < 0 || target_fds[i] < 0 || target_fds[i] >= 64) {
+        if (recv_fds[i] < 0 || target_fds[i] < 0 || target_fds[i] >= GMR_SCAN_FDS) {
             for (uint32_t j = 0; j < fd_count; j++) if (recv_fds[j] >= 0) close(recv_fds[j]);
             close(cfd);
             return;
@@ -286,12 +311,17 @@ static void gmr_handle_client(int cfd) {
         return;
     }
 
+    char log_cmd[160];
+    char log_arg1[160];
+    snprintf(log_cmd, sizeof(log_cmd), "%s", c_argv[0] ? c_argv[0] : "-");
+    snprintf(log_arg1, sizeof(log_arg1), "%s", (c_argc > 1 && c_argv[1]) ? c_argv[1] : "-");
+
     signal(SIGCHLD, SIG_DFL);
     pid_t cmd_pid = fork();
     if (cmd_pid == 0) {
         int tmp_fds[GMR_MAX_FDS];
         for (uint32_t i = 0; i < fd_count; i++) {
-            tmp_fds[i] = fcntl(recv_fds[i], F_DUPFD_CLOEXEC, 64);
+            tmp_fds[i] = fcntl(recv_fds[i], F_DUPFD_CLOEXEC, GMR_SCAN_FDS);
             if (tmp_fds[i] < 0) tmp_fds[i] = recv_fds[i];
             else close(recv_fds[i]);
         }
@@ -307,6 +337,7 @@ static void gmr_handle_client(int cfd) {
         setgid(0);
         setuid(0);
         environ = c_envp;
+        setenv("HOME", "/var/root", 1);
         const char *cur_path = getenv("PATH");
         if (!cur_path || !strstr(cur_path, "/var/jb/usr/bin")) {
             setenv("PATH", GMR_DEFAULT_PATH, 1);
@@ -331,6 +362,7 @@ static void gmr_handle_client(int cfd) {
             rc = (int32_t)(128 + WTERMSIG(st));
         }
     }
+    gmr_log_exec(log_cmd, log_arg1, fd_count, rc);
     (void)gmr_write_all(cfd, &rc, sizeof(rc));
     close(cfd);
 }
