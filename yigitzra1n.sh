@@ -176,13 +176,12 @@ find_ipsw() {
 }
 
 ensure_local_server() {
-  if ! lsof -i :8765 >/dev/null 2>&1; then
-    echo "[*] Starting local firmware metadata server (127.0.0.1:8765)..."
-    mkdir -p "$BUILD_DIR"
-    nohup python3 "$ROOT_DIR/src/local_server.py" --root "$LOCAL_API_DIR" \
-      >> "$BUILD_DIR/local_server.log" 2>&1 &
-    sleep 0.6
-  fi
+  YIGITZRA1N_IPSW_DIR="$IPSW_DIR" python3 - "$ROOT_DIR/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import pongo_wifi_boot
+pongo_wifi_boot.ensure_local_server()
+PY
 }
 
 run_engine_clean() {
@@ -699,8 +698,14 @@ cmd_install() {
   }
   ensure_patched_engine
   ensure_n71ap_devicetree
-  local ipsw_1588
-  ipsw_1588="$(find_ipsw "$IPSW_6S_1588_GLOB")"
+  local ipsw_1588=""
+  ipsw_1588="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$IPSW_6S_1588_GLOB" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$ipsw_1588" ]]; then
+    echo "[ERROR] Missing stock iOS 15.8.8 IPSW in $IPSW_DIR. Run './yigitzra1n.sh prepare' first." >&2
+    telemetry_send "install_fail" "install" "$TELEMETRY_STEP" "yigitzra1n.sh" "$LINENO" 1 "missing_1588_ipsw" "Missing iOS 15.8.8 IPSW in $IPSW_DIR"
+    telemetry_mark_reported
+    exit 1
+  fi
   ensure_local_server
 
   echo "======================================================================"
@@ -846,8 +851,8 @@ cmd_boot() {
   check_macos_host
   check_cli_tools
   ensure_python_venv
-  [[ -d "$BUILD_DIR/hybrid_ipsw" && -f "$BUILD_DIR/bin/hw_init_probe.bin" ]] || {
-    echo "[ERROR] Build outputs missing. Run './yigitzra1n.sh prepare' first." >&2
+  [[ -d "$BUILD_DIR/hybrid_ipsw" && -f "$BUILD_DIR/hybrid_ipsw/098-68805-067.dmg" && -f "$BUILD_DIR/bin/hw_init_probe.bin" ]] || {
+    echo "[ERROR] Build outputs missing (or incomplete hybrid_ipsw/098-68805-067.dmg). Run './yigitzra1n.sh prepare' first." >&2
     exit 1
   }
   ensure_patched_engine
@@ -858,7 +863,7 @@ cmd_boot() {
   [[ -n "$BOOT_ARGS" ]] && py_args+=(--boot-args "$BOOT_ARGS")
   [[ "$QUIET" -eq 1 ]] && py_args+=(--quiet)
   [[ "$FORCE" -eq 1 || "${YIGITZRA1N_S8000_CONFIRMED:-0}" == "1" ]] && py_args+=(--force)
-  telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
+  YIGITZRA1N_IPSW_DIR="$IPSW_DIR" telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
   if [[ "$TELEMETRY_CMD" == "boot" ]]; then
     telemetry_send "install_success" "boot" "BOOT_DONE" "yigitzra1n.sh" "$LINENO" 0 "booted" ""
   fi
@@ -1066,6 +1071,29 @@ PY
     aop_arg=(--aop-bin "$BUILD_DIR/s8000aop.bin")
   fi
 
+  local patch_iproxy_pid=""
+  cleanup_patch_device() {
+    if [[ -n "$patch_iproxy_pid" ]]; then
+      kill "$patch_iproxy_pid" 2>/dev/null || true
+      wait "$patch_iproxy_pid" 2>/dev/null || true
+      patch_iproxy_pid=""
+    fi
+  }
+  trap 'rc=$?; cleanup_patch_device; telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$rc"' EXIT
+  if [[ "$DEVICE_HOST" == "127.0.0.1" || "$DEVICE_HOST" == "localhost" ]]; then
+    if ! lsof -iTCP:"$DEVICE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      if command -v iproxy >/dev/null 2>&1; then
+        if iproxy --help 2>&1 | grep -q "LOCAL_PORT:DEVICE_PORT"; then
+          iproxy "${DEVICE_PORT}:22" >/dev/null 2>&1 &
+        else
+          iproxy "$DEVICE_PORT" 22 >/dev/null 2>&1 &
+        fi
+        patch_iproxy_pid=$!
+        sleep 1
+      fi
+    fi
+  fi
+
   DEVICE_HOST="$DEVICE_HOST" DEVICE_PORT="$DEVICE_PORT" \
     bash "$ROOT_DIR/scripts/apply_device_patches.sh" ${aop_arg[@]+"${aop_arg[@]}"}
 
@@ -1084,6 +1112,8 @@ PY
     ' < "$IC_INFO"
     echo "[+] IC-Info.sisv installed."
   fi
+  cleanup_patch_device
+  trap 'telemetry_on_exit "$TELEMETRY_CMD" "$TELEMETRY_STEP" "$?"' EXIT
   telemetry_send "install_success" "patch-device" "PATCH_DEVICE_DONE" "yigitzra1n.sh" "$LINENO" 0 "patched" ""
 }
 

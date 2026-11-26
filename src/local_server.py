@@ -9,7 +9,7 @@ class RangeHandler(SimpleHTTPRequestHandler):
         if os.environ.get("LOCAL_SERVER_VERBOSE") == "1":
             super().log_message(fmt, *args)
 
-    def do_GET(self):
+    def _serve_file(self, send_body: bool):
         path = self.translate_path(self.path.split("?", 1)[0])
         if not os.path.isfile(path):
             self.send_error(404)
@@ -30,15 +30,16 @@ class RangeHandler(SimpleHTTPRequestHandler):
                 self.send_header("Content-Range", f"bytes {start}-{end}/{fsize}")
                 self.send_header("Content-Length", str(length))
                 self.end_headers()
-                with open(path, "rb") as f:
-                    f.seek(start)
-                    remaining = length
-                    while remaining > 0:
-                        chunk = f.read(min(65536, remaining))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
+                if send_body:
+                    with open(path, "rb") as f:
+                        f.seek(start)
+                        remaining = length
+                        while remaining > 0:
+                            chunk = f.read(min(65536, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
                 return
 
         self.send_response(200)
@@ -46,12 +47,19 @@ class RangeHandler(SimpleHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(fsize))
         self.end_headers()
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
+        if send_body:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+
+    def do_HEAD(self):
+        self._serve_file(send_body=False)
+
+    def do_GET(self):
+        self._serve_file(send_body=True)
 
 def main():
     ap = argparse.ArgumentParser()

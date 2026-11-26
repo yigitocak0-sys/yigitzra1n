@@ -25,12 +25,49 @@ for req in sn2400_charger_daemon libn71m_avgestalt.dylib libn71m_tipsmodel.dylib
   fi
 done
 
-SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no -o PreferredAuthentications=password -o ConnectTimeout=10 -p "$DEVICE_PORT")
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no -o PreferredAuthentications=password -o ConnectTimeout=5 -p "$DEVICE_PORT")
 run_ssh() { sshpass -p "$SSH_PASS" ssh "${SSH_OPTS[@]}" "root@${DEVICE_HOST}" "$@"; }
 
 mkdir -p "$BUILD_DIR/.tmp"
 WORK_TMP="$(mktemp -d "$BUILD_DIR/.tmp/n71m_apply.XXXXXX")"
-trap 'rm -rf "$WORK_TMP"' EXIT
+IPROXY_PID=""
+cleanup() {
+  if [[ -n "$IPROXY_PID" ]]; then
+    kill "$IPROXY_PID" 2>/dev/null || true
+    wait "$IPROXY_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORK_TMP"
+}
+trap cleanup EXIT
+
+if [[ "$DEVICE_HOST" == "127.0.0.1" || "$DEVICE_HOST" == "localhost" ]]; then
+  if ! lsof -iTCP:"$DEVICE_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    if command -v iproxy >/dev/null 2>&1; then
+      if iproxy --help 2>&1 | grep -q "LOCAL_PORT:DEVICE_PORT"; then
+        iproxy "${DEVICE_PORT}:22" >/dev/null 2>&1 &
+      else
+        iproxy "$DEVICE_PORT" 22 >/dev/null 2>&1 &
+      fi
+      IPROXY_PID=$!
+      sleep 1
+    fi
+  fi
+fi
+
+ssh_ready=0
+for _try in {1..10}; do
+  if run_ssh "true" >/dev/null 2>&1; then
+    ssh_ready=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$ssh_ready" -ne 1 ]]; then
+  echo "[ERROR] Could not connect to device SSH on ${DEVICE_HOST}:${DEVICE_PORT}." >&2
+  telemetry_send "install_fail" "${TELEMETRY_CMD:-patch-device}" "WAIT_SSH" "apply_device_patches.sh" "$LINENO" 1 "ssh_connect_failed" "SSH timeout on port ${DEVICE_PORT}"
+  telemetry_mark_reported
+  exit 1
+fi
 
 echo "[1/5] Deploying sn2400_charger_daemon v6, dylibs, and optional AOP firmware..."
 STAGE="$WORK_TMP/stage"

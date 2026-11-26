@@ -295,23 +295,30 @@ echo "[4/4] Finalizing setup & restarting SpringBoard..."
 ) || true
 
 rc=0
-run_ssh '
-  set -e
-  export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  killall -9 mobileactivationd 2>/dev/null || {
-    for pid in $(ps -A -o pid,comm | sed -n "/mobileactivationd/s/^[ ]*\([0-9]*\).*/\1/p"); do
-      kill -9 "$pid" 2>/dev/null || true
-    done
-  }
-  sleep 1
-  killall -9 lockdownd 2>/dev/null || {
-    for pid in $(ps -A -o pid,comm | sed -n "/lockdownd/s/^[ ]*\([0-9]*\).*/\1/p"); do
-      kill -9 "$pid" 2>/dev/null || true
-    done
-  }
-  sleep 1
-  /usr/local/bin/ios16_skip_setup
-' || rc=$?
+run_skip_setup_ssh() {
+  run_ssh '
+    set -e
+    export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    killall -9 mobileactivationd 2>/dev/null || {
+      for pid in $(ps -A -o pid,comm | sed -n "/mobileactivationd/s/^[ ]*\([0-9]*\).*/\1/p"); do
+        kill -9 "$pid" 2>/dev/null || true
+      done
+    }
+    sleep 1
+    /usr/local/bin/ios16_skip_setup
+  '
+}
+run_skip_setup_ssh || rc=$?
+if [[ "$rc" -eq 255 ]]; then
+  for _w in {1..5}; do
+    sleep 2
+    if run_ssh "true" >/dev/null 2>&1; then
+      rc=0
+      run_skip_setup_ssh || rc=$?
+      break
+    fi
+  done
+fi
 if [[ "$rc" -ne 0 ]]; then
   case "$rc" in
     77) telemetry_send "security_block" "${TELEMETRY_CMD:-activate}" "$ACTIVATE_STEP" "activate_device.sh" "$LINENO" 77 "target_hw_os_mismatch_77" "ios16_skip_setup returned 77" ;;
@@ -326,8 +333,8 @@ fi
 rc_ui=0
 run_ssh '
   export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  killall -9 budd Setup SpringBoard 2>/dev/null || {
-    for pid in $(ps -A -o pid,comm | sed -n "/budd/s/^[ ]*\([0-9]*\).*/\1/p;/\/Applications\/Setup\.app\/Setup/s/^[ ]*\([0-9]*\).*/\1/p;/SpringBoard\.app\/SpringBoard/s/^[ ]*\([0-9]*\).*/\1/p"); do
+  killall -9 lockdownd budd Setup SpringBoard 2>/dev/null || {
+    for pid in $(ps -A -o pid,comm | sed -n "/lockdownd/s/^[ ]*\([0-9]*\).*/\1/p;/budd/s/^[ ]*\([0-9]*\).*/\1/p;/\/Applications\/Setup\.app\/Setup/s/^[ ]*\([0-9]*\).*/\1/p;/SpringBoard\.app\/SpringBoard/s/^[ ]*\([0-9]*\).*/\1/p"); do
       kill -9 "$pid" 2>/dev/null || true
     done
   }

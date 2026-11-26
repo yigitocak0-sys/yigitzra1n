@@ -10,6 +10,7 @@ import signal
 import struct
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -64,17 +65,79 @@ def find_irecovery() -> str:
             return cand
     raise RuntimeError("irecovery not found (install via: brew install libirecovery)")
 
-def ensure_local_server() -> None:
-    r = subprocess.run(["lsof", "-i", ":8765"], capture_output=True)
-    if r.returncode != 0:
-        print("[*] Starting local firmware metadata server (127.0.0.1:8765)...", flush=True)
-        log_path = BUILD_DIR / "local_server.log"
-        with log_path.open("ab") as logf:
-            subprocess.Popen(
-                ["python3", str(ROOT_DIR / "src/local_server.py"), "--root", str(LOCAL_API_DIR)],
-                stdout=logf, stderr=logf, start_new_session=True,
+def repair_local_api_if_needed() -> int:
+    LOCAL_API_DIR.mkdir(parents=True, exist_ok=True)
+    link_path = LOCAL_API_DIR / "local_1588.ipsw"
+    if not link_path.is_file():
+        ipsw_dir = Path(os.environ.get("YIGITZRA1N_IPSW_DIR") or (ROOT_DIR / "ipsw"))
+        matches = sorted(
+            [p for p in ipsw_dir.glob("iPhone_4.7_15.8.8_*_Restore.ipsw") if p.is_file()],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        if not matches:
+            raise FileNotFoundError(
+                f"Missing {link_path} and no stock iOS 15.8.8 IPSW in {ipsw_dir}. Run './yigitzra1n.sh prepare' first."
             )
-        time.sleep(0.5)
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+        link_path.symlink_to(matches[0].resolve())
+    return link_path.stat().st_size
+
+def probe_local_server(expected_size: int) -> bool:
+    req = urllib.request.Request(
+        "http://127.0.0.1:8765/local_1588.ipsw",
+        headers={"Range": "bytes=0-3"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status not in (200, 206):
+                return False
+            data = resp.read(4)
+            if data[:2] != b"PK":
+                return False
+            cr = resp.headers.get("Content-Range", "")
+            if "/" in cr:
+                try:
+                    return int(cr.rsplit("/", 1)[1]) == expected_size
+                except ValueError:
+                    return False
+            cl = resp.headers.get("Content-Length", "")
+            if cl.isdigit():
+                return int(cl) == expected_size
+            return True
+    except Exception:
+        return False
+
+def ensure_local_server() -> None:
+    expected_size = repair_local_api_if_needed()
+    if probe_local_server(expected_size):
+        return
+
+    r = subprocess.run(["lsof", "-ti", ":8765"], capture_output=True, text=True)
+    for pid_s in r.stdout.split():
+        if not pid_s.isdigit():
+            continue
+        ps = subprocess.run(["ps", "-p", pid_s, "-o", "command="], capture_output=True, text=True)
+        if "local_server.py" in ps.stdout:
+            try:
+                os.kill(int(pid_s), signal.SIGTERM)
+            except OSError:
+                pass
+    time.sleep(0.3)
+
+    print("[*] Starting local firmware metadata server (127.0.0.1:8765)...", flush=True)
+    log_path = BUILD_DIR / "local_server.log"
+    with log_path.open("ab") as logf:
+        subprocess.Popen(
+            ["python3", str(ROOT_DIR / "src/local_server.py"), "--root", str(LOCAL_API_DIR)],
+            stdout=logf, stderr=logf, start_new_session=True,
+        )
+    for _ in range(15):
+        if probe_local_server(expected_size):
+            return
+        time.sleep(0.2)
+    raise RuntimeError("Local firmware server on 127.0.0.1:8765 failed health check for local_1588.ipsw.")
 
 def find_block_file(explicit: str = "") -> Path:
     if explicit:
@@ -96,7 +159,7 @@ def check_and_pwn_dfu(force: bool = False) -> None:
     r = subprocess.run([irec, "-q"], capture_output=True, text=True)
     out = r.stdout + r.stderr
     if "MODE: DFU" not in out:
-        raise RuntimeError(f"Device is not in DFU mode:\n{out.strip()}")
+        raise RuntimeError(f"{out.strip()}\nDevice is not in DFU mode.")
 
     low = out.lower()
     bdid = ""
@@ -134,7 +197,7 @@ def check_and_pwn_dfu(force: bool = False) -> None:
         print("[*] Device is already in pwnDFU mode.", flush=True)
         return
     if "iboot-2234" not in low:
-        raise RuntimeError(f"Expected clean SecureROM DFU (iBoot-2234...):\n{out.strip()}")
+        raise RuntimeError(f"{out.strip()}\nExpected clean SecureROM DFU (iBoot-2234...).")
 
     print("[*] Putting device into pwnDFU mode...", flush=True)
     p = subprocess.run([str(ENGINE_DIR / "bin/engine_helper"), "-D"], cwd=str(ENGINE_DIR))
