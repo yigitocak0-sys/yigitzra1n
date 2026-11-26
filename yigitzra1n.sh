@@ -706,6 +706,15 @@ cmd_install() {
     telemetry_mark_reported
     exit 1
   fi
+  local ipsw_rc=0
+  python3 "$ROOT_DIR/scripts/verify_ipsw.py" "$ipsw_1588" "iPhone 6s (15.8.8) IPSW" || ipsw_rc=$?
+  if [[ "$ipsw_rc" -ne 0 ]]; then
+    local ipsw_reason="invalid_ipsw_zip"
+    [[ "$ipsw_rc" -eq 21 ]] && ipsw_reason="invalid_ipsw_alias"
+    telemetry_send "install_fail" "install" "$TELEMETRY_STEP" "yigitzra1n.sh" "$LINENO" "$ipsw_rc" "$ipsw_reason" "Invalid iOS 15.8.8 IPSW: $ipsw_1588"
+    telemetry_mark_reported
+    exit 1
+  fi
   ensure_local_server
 
   echo "======================================================================"
@@ -1099,17 +1108,34 @@ PY
 
   if [[ -n "$IC_INFO" && -f "$IC_INFO" ]]; then
     echo "[*] Installing device FairPlay IC-Info.sisv..."
-    sshpass -p "${SSH_PASS:-alpine}" ssh \
-      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o PubkeyAuthentication=no -p "$DEVICE_PORT" "root@${DEVICE_HOST}" '
-      set -e
-      mkdir -p /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes
-      cat > /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes/IC-Info.sisv
-      chown -R mobile:mobile /private/var/mobile/Library/FairPlay
-      chmod 755 /private/var/mobile/Library/FairPlay /private/var/mobile/Library/FairPlay/iTunes_Control /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes
-      chmod 644 /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes/IC-Info.sisv
-      killall -9 fairplayd.A2 2>/dev/null || true
-    ' < "$IC_INFO"
+    local ic_ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no -o PreferredAuthentications=password -o ConnectTimeout=5 -p "$DEVICE_PORT")
+    local ic_rc=0
+    push_ic_info_ssh() {
+      sshpass -p "${SSH_PASS:-alpine}" ssh "${ic_ssh_opts[@]}" "root@${DEVICE_HOST}" '
+        set -e
+        mkdir -p /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes
+        cat > /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes/IC-Info.sisv
+        chown -R mobile:mobile /private/var/mobile/Library/FairPlay
+        chmod 755 /private/var/mobile/Library/FairPlay /private/var/mobile/Library/FairPlay/iTunes_Control /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes
+        chmod 644 /private/var/mobile/Library/FairPlay/iTunes_Control/iTunes/IC-Info.sisv
+        killall -9 fairplayd.A2 2>/dev/null || true
+      ' < "$IC_INFO"
+    }
+    push_ic_info_ssh || ic_rc=$?
+    if [[ "$ic_rc" -eq 255 ]]; then
+      for _w in {1..5}; do
+        sleep 2
+        if sshpass -p "${SSH_PASS:-alpine}" ssh "${ic_ssh_opts[@]}" "root@${DEVICE_HOST}" "true" >/dev/null 2>&1; then
+          ic_rc=0
+          push_ic_info_ssh || ic_rc=$?
+          break
+        fi
+      done
+    fi
+    if [[ "$ic_rc" -ne 0 ]]; then
+      echo "[ERROR] Failed installing IC-Info.sisv (SSH exit $ic_rc)." >&2
+      exit "$ic_rc"
+    fi
     echo "[+] IC-Info.sisv installed."
   fi
   cleanup_patch_device

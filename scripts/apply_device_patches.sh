@@ -3,6 +3,9 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/telemetry.sh"
+export TELEMETRY_MARKER_FILE="${TELEMETRY_MARKER_FILE:-$ROOT_DIR/build/.tmp/.telemetry_reported}"
+[[ "${TELEMETRY_PARENT:-0}" == "1" ]] || rm -f "$TELEMETRY_MARKER_FILE" 2>/dev/null || true
+export TELEMETRY_PARENT=1
 trap 'telemetry_trap_err "${TELEMETRY_CMD:-patch-device}" "${TELEMETRY_STEP:-PATCH_DEVICE}" "apply_device_patches.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR
 BUILD_DIR="$ROOT_DIR/build"
 BIN_DIR="$BUILD_DIR/bin"

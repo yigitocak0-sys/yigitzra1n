@@ -4,6 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/config/firmware_urls.env"
 source "$ROOT_DIR/scripts/telemetry.sh"
+export TELEMETRY_MARKER_FILE="${TELEMETRY_MARKER_FILE:-$ROOT_DIR/build/.tmp/.telemetry_reported}"
+[[ "${TELEMETRY_PARENT:-0}" == "1" ]] || rm -f "$TELEMETRY_MARKER_FILE" 2>/dev/null || true
 
 FETCH_STEP="FETCH_INIT"
 trap 'telemetry_trap_err "${TELEMETRY_CMD:-prepare}" "$FETCH_STEP" "01_fetch_assets.sh" "$LINENO" "$?" "${BASH_COMMAND:-}"' ERR
@@ -51,6 +53,20 @@ fetch_with_resume() {
   return "$rc"
 }
 
+verify_local_ipsw() {
+  local path="$1"
+  local label="$2"
+  local rc=0
+  python3 "$ROOT_DIR/scripts/verify_ipsw.py" "$path" "$label IPSW" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    local reason="invalid_ipsw_zip"
+    [[ "$rc" -eq 21 ]] && reason="invalid_ipsw_alias"
+    telemetry_send "install_fail" "${TELEMETRY_CMD:-prepare}" "$FETCH_STEP" "01_fetch_assets.sh" "$LINENO" "$rc" "$reason" "$label IPSW invalid: $path"
+    telemetry_mark_reported
+    exit 1
+  fi
+}
+
 resolve_or_fetch_ipsw() {
   local label="$1"
   local glob_pat="$2"
@@ -60,6 +76,7 @@ resolve_or_fetch_ipsw() {
   local found=""
   found="$(find -L "$IPSW_DIR" -maxdepth 2 -type f -name "$glob_pat" ! -name "*.part" 2>/dev/null | head -n 1 || true)"
   if [[ -n "$found" ]]; then
+    verify_local_ipsw "$found" "$label"
     echo "[+] Found local $label IPSW: $found"
     return 0
   fi
@@ -77,6 +94,7 @@ resolve_or_fetch_ipsw() {
   echo "    Dest: $dst"
   fetch_with_resume "$url" "$part" "$label IPSW"
   mv "$part" "$dst"
+  verify_local_ipsw "$dst" "$label"
   echo "[+] Downloaded $label IPSW: $dst"
 }
 
