@@ -30,6 +30,7 @@ DEFAULT_PACKAGES = [
     "lsof",
     "htop",
     "rsync",
+    "libkrw0-tfp0",
     "uikittools",
     "org.coolstar.sileo",
 ]

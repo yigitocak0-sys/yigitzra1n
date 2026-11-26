@@ -140,13 +140,16 @@ if run_ssh '
   test -f /private/var/jb/.yigitzra1n_fw_ready &&
   test -f /private/var/jb/.yigitzra1n_repos_v2_ready &&
   test -S /var/run/yigitzra1n_gmr.sock &&
-  grep -qa "yigitzra1n_gmr" /Applications/Sileo.app/giveMeRoot 2>/dev/null &&
-  grep -qa "yigitzra1n_gmr_daemon_v2" /usr/local/libexec/ios16_sshd_launcher 2>/dev/null &&
+  grep -qa "yigitzra1n_gmr_v2" /Applications/Sileo.app/giveMeRoot 2>/dev/null &&
+  grep -qa "yigitzra1n_gmr_daemon_v3" /usr/local/libexec/ios16_sshd_launcher 2>/dev/null &&
   test -f /private/var/mobile/Library/SpringBoard/statusBarOverrides &&
   [ "$(wc -c < /private/var/mobile/Library/SpringBoard/statusBarOverrides 2>/dev/null | tr -d " ")" = "3944" ] &&
   [ "$(stat -c "%u" /var/jb/var/mobile 2>/dev/null || stat -f "%u" /var/jb/var/mobile 2>/dev/null)" = "501" ] &&
   grep -qa "com.apple.private.security.no-sandbox" /Applications/Sileo.app/Sileo 2>/dev/null &&
   grep -q "^Package: org.coolstar.sileo$" /var/jb/Library/dpkg/status 2>/dev/null &&
+  ( ! grep -q "^Package: libkrw0$" /var/jb/Library/dpkg/status 2>/dev/null || grep -q "Provides:.*libkrw0-plugin" /var/jb/Library/dpkg/status 2>/dev/null ) &&
+  [ "$(stat -c "%a" /private/var/jb/var/cache/apt/archives 2>/dev/null || stat -f "%Lp" /private/var/jb/var/cache/apt/archives 2>/dev/null)" = "1777" ] &&
+  test -d /private/var/jb/var/tmp &&
   test -d /private/var/jb/var/lib/apt/sileolists/partial &&
   test -s /private/var/jb/var/lib/apt/lists/apt.thebigboss.org_repofiles_cydia_dists_stable_main_binary-iphoneos-arm64_Packages &&
   test -s /private/var/jb/var/lib/apt/sileolists/apt.thebigboss.org_repofiles_cydia_dists_stable_main_binary-iphoneos-arm64_Packages &&
@@ -188,11 +191,12 @@ PY
 
 UK_DEB="$(find_latest_deb 'uikittools_*.deb')"
 SILEO_DEB="$(find_latest_deb 'org.coolstar.sileo_*.deb')"
-if [[ -z "$UK_DEB" || -z "$SILEO_DEB" || ! -f "$PROCURSUS_DIR/bootstrap-iphoneos-arm64.tar.zst" ]]; then
+KRW_DEB="$(find_latest_deb 'libkrw0-tfp0_*.deb')"
+if [[ -z "$UK_DEB" || -z "$SILEO_DEB" || -z "$KRW_DEB" || ! -f "$PROCURSUS_DIR/bootstrap-iphoneos-arm64.tar.zst" ]]; then
   echo "[*] Fetching Sileo & uikittools packages from Procursus..."
   if ! "$PY_BIN" "$ROOT_DIR/scripts/resolve_procursus_debs.py" \
     --cache-dir "$PROCURSUS_DIR" \
-    --packages uikittools org.coolstar.sileo; then
+    --packages uikittools org.coolstar.sileo libkrw0-tfp0; then
     if [[ "$SILEO_REQUIRE_SSH" -eq 1 ]]; then
       report_sileo_fail "$LINENO" 1 "sileo_deb_fetch_failed" "Failed to download Sileo/uikittools packages from Procursus"
       exit 1
@@ -202,6 +206,7 @@ if [[ -z "$UK_DEB" || -z "$SILEO_DEB" || ! -f "$PROCURSUS_DIR/bootstrap-iphoneos
   fi
   UK_DEB="$(find_latest_deb 'uikittools_*.deb')"
   SILEO_DEB="$(find_latest_deb 'org.coolstar.sileo_*.deb')"
+  KRW_DEB="$(find_latest_deb 'libkrw0-tfp0_*.deb')"
 fi
 
 if [[ -z "$UK_DEB" || -z "$SILEO_DEB" ]]; then
@@ -220,10 +225,10 @@ ensure_gmr_binaries() {
   local sshd_bin="$bin_dir/ios16_sshd_launcher"
   local need_gmr=0 need_sshd=0
 
-  if [[ ! -x "$gmr_bin" || "$ROOT_DIR/src/yigitzra1n_givemeroot.c" -nt "$gmr_bin" ]] || ! grep -qa "yigitzra1n_gmr" "$gmr_bin" 2>/dev/null; then
+  if [[ ! -x "$gmr_bin" || "$ROOT_DIR/src/yigitzra1n_givemeroot.c" -nt "$gmr_bin" ]] || ! grep -qa "yigitzra1n_gmr_v2" "$gmr_bin" 2>/dev/null; then
     need_gmr=1
   fi
-  if [[ ! -x "$sshd_bin" || "$ROOT_DIR/src/ios16_sshd_launcher.c" -nt "$sshd_bin" ]] || ! grep -qa "yigitzra1n_gmr_daemon_v2" "$sshd_bin" 2>/dev/null; then
+  if [[ ! -x "$sshd_bin" || "$ROOT_DIR/src/ios16_sshd_launcher.c" -nt "$sshd_bin" ]] || ! grep -qa "yigitzra1n_gmr_daemon_v3" "$sshd_bin" 2>/dev/null; then
     need_sshd=1
   fi
   if [[ "$need_gmr" -eq 0 && "$need_sshd" -eq 0 ]]; then
@@ -283,6 +288,9 @@ ln -sfn "/Applications/Sileo.app" "$STAGE_JB/Applications/Sileo.app"
 if [[ -x "$BUILD_DIR/bin/ios16_sshd_launcher" ]]; then
   cp -f "$BUILD_DIR/bin/ios16_sshd_launcher" "$STAGE_JB/tmp/yigitzra1n_sshd_launcher"
   chmod 755 "$STAGE_JB/tmp/yigitzra1n_sshd_launcher"
+fi
+if [[ -n "${KRW_DEB:-}" && -f "$KRW_DEB" ]]; then
+  cp -f "$KRW_DEB" "$STAGE_JB/tmp/libkrw0-tfp0.deb"
 fi
 
 # Extract single-package status stanzas so we merge cleanly without overwriting existing dpkg/status.
@@ -565,6 +573,17 @@ ${ln}"
   done
   chown -R mobile:mobile /private/var/jb/var/lib/apt/sileolists 2>/dev/null || chown -R 501:501 /private/var/jb/var/lib/apt/sileolists 2>/dev/null || true
   chmod 755 /private/var/jb/var/lib/apt/lists /private/var/jb/var/lib/apt/sileolists /private/var/jb/var/lib/apt/sileolists/partial 2>/dev/null || true
+  mkdir -p /private/var/jb/var/cache/apt/archives/partial /private/var/jb/var/tmp
+  chmod 1777 /private/var/jb/var/cache/apt/archives /private/var/jb/var/cache/apt/archives/partial /private/var/jb/var/tmp 2>/dev/null || true
+
+  # Fix Procursus libkrw0 unmet libkrw0-plugin dependency if needed
+  KRW_STAGE="/private/var/jb/tmp/libkrw0-tfp0.deb"
+  if [ -f "$KRW_STAGE" ]; then
+    if grep -q "^Package: libkrw0$" /var/jb/Library/dpkg/status 2>/dev/null && ! grep -q "Provides:.*libkrw0-plugin" /var/jb/Library/dpkg/status 2>/dev/null; then
+      /var/jb/usr/bin/dpkg -i "$KRW_STAGE" >/dev/null 2>&1 || true
+    fi
+    rm -f "$KRW_STAGE"
+  fi
 
   # Update ios16_sshd_launcher & start yigitzra1n_gmr root helper daemon if needed
   SSH_L_STAGE="/private/var/jb/tmp/yigitzra1n_sshd_launcher"

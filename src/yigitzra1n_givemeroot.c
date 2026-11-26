@@ -4,6 +4,7 @@
  * (including stdin/stdout/stderr via SCM_RIGHTS) to ios16_sshd_launcher's root daemon.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,8 +20,9 @@ extern char **environ;
 #define GMR_SOCK_PATH "/var/run/yigitzra1n_gmr.sock"
 #define GMR_MAX_ARGS 256
 #define GMR_MAX_ENV  256
+#define GMR_MAX_FDS  32
 
-static const char GMR_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_v1";
+static const char GMR_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_v2";
 
 static int write_all(int fd, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
@@ -126,11 +128,24 @@ int main(int argc, char **argv) {
         return 71;
     }
 
-    char dummy = 'G';
-    struct iovec iov = { .iov_base = &dummy, .iov_len = 1 };
+    /* Forward stdio (0..2) plus any inheritable pipes/FDs (e.g. APT::Status-Fd=5, Keep-Fds=6) */
+    int pass_fds[GMR_MAX_FDS];
+    int32_t pass_nums[GMR_MAX_FDS];
+    uint32_t fd_count = 0;
+    for (int fd = 0; fd < GMR_MAX_FDS; fd++) {
+        if (fd == sock) continue;
+        int flags = fcntl(fd, F_GETFD);
+        if (flags == -1) continue;
+        if (fd > STDERR_FILENO && (flags & FD_CLOEXEC) != 0) continue;
+        pass_fds[fd_count] = fd;
+        pass_nums[fd_count] = (int32_t)fd;
+        fd_count++;
+    }
+
+    struct iovec iov = { .iov_base = &fd_count, .iov_len = sizeof(fd_count) };
     union {
         struct cmsghdr hdr;
-        char buf[64];
+        char buf[CMSG_SPACE(sizeof(int) * GMR_MAX_FDS)];
     } cmsg_u;
     memset(&cmsg_u, 0, sizeof(cmsg_u));
 
@@ -138,19 +153,25 @@ int main(int argc, char **argv) {
     memset(&msg, 0, sizeof(msg));
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_u.buf;
-    msg.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(int) * 3);
-
-    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
-    cm->cmsg_level = SOL_SOCKET;
-    cm->cmsg_type = SCM_RIGHTS;
-    cm->cmsg_len = (socklen_t)CMSG_LEN(sizeof(int) * 3);
-    int fds[3] = { STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO };
-    memcpy(CMSG_DATA(cm), fds, sizeof(fds));
+    if (fd_count > 0) {
+        msg.msg_control = cmsg_u.buf;
+        msg.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(int) * fd_count);
+        struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+        cm->cmsg_level = SOL_SOCKET;
+        cm->cmsg_type = SCM_RIGHTS;
+        cm->cmsg_len = (socklen_t)CMSG_LEN(sizeof(int) * fd_count);
+        memcpy(CMSG_DATA(cm), pass_fds, sizeof(int) * fd_count);
+    }
 
     if (sendmsg(sock, &msg, 0) < 0) {
         close(sock);
-        fprintf(stderr, "Error: failed to send stdio descriptors\n");
+        fprintf(stderr, "Error: failed to send file descriptors\n");
+        return 71;
+    }
+
+    if (fd_count > 0 && write_all(sock, pass_nums, sizeof(int32_t) * fd_count) != 0) {
+        close(sock);
+        fprintf(stderr, "Error: failed to send fd numbers\n");
         return 71;
     }
 

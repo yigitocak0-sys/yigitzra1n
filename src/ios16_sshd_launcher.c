@@ -29,9 +29,10 @@ extern char **environ;
 #define GMR_MAX_ARGS  256
 #define GMR_MAX_ENV   256
 #define GMR_MAX_STR   65536
+#define GMR_MAX_FDS   32
 #define GMR_DEFAULT_PATH "/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-static const char GMR_DAEMON_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_daemon_v2";
+static const char GMR_DAEMON_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_daemon_v3";
 
 static void mkdir_p(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
@@ -213,11 +214,11 @@ static void gmr_handle_client(int cfd) {
         return;
     }
 
-    char dummy = 0;
-    struct iovec iov = { .iov_base = &dummy, .iov_len = 1 };
+    uint32_t fd_count = 0;
+    struct iovec iov = { .iov_base = &fd_count, .iov_len = sizeof(fd_count) };
     union {
         struct cmsghdr hdr;
-        char buf[64];
+        char buf[CMSG_SPACE(sizeof(int) * GMR_MAX_FDS) + 64];
     } cmsg_u;
     memset(&cmsg_u, 0, sizeof(cmsg_u));
 
@@ -229,23 +230,49 @@ static void gmr_handle_client(int cfd) {
     msg.msg_controllen = sizeof(cmsg_u.buf);
 
     ssize_t rn = recvmsg(cfd, &msg, 0);
-    if (rn <= 0) {
+    if (rn < (ssize_t)sizeof(fd_count) || fd_count > GMR_MAX_FDS) {
         close(cfd);
         return;
     }
 
-    int fds[3] = { -1, -1, -1 };
+    int recv_fds[GMR_MAX_FDS];
+    int32_t target_fds[GMR_MAX_FDS];
+    for (int i = 0; i < GMR_MAX_FDS; i++) {
+        recv_fds[i] = -1;
+        target_fds[i] = -1;
+    }
+
+    uint32_t got_fds = 0;
     for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
-        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS &&
-            cm->cmsg_len >= (socklen_t)CMSG_LEN(sizeof(int) * 3)) {
-            memcpy(fds, CMSG_DATA(cm), sizeof(fds));
+        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS) {
+            size_t payload_len = cm->cmsg_len > CMSG_LEN(0) ? (size_t)(cm->cmsg_len - CMSG_LEN(0)) : 0;
+            uint32_t n = (uint32_t)(payload_len / sizeof(int));
+            if (n > GMR_MAX_FDS) n = GMR_MAX_FDS;
+            if (n > 0) memcpy(recv_fds, CMSG_DATA(cm), sizeof(int) * n);
+            got_fds = n;
             break;
         }
     }
-    if (fds[0] < 0 || fds[1] < 0 || fds[2] < 0) {
-        for (int i = 0; i < 3; i++) if (fds[i] >= 0) close(fds[i]);
+    if (got_fds < fd_count) {
+        for (uint32_t i = 0; i < got_fds; i++) if (recv_fds[i] >= 0) close(recv_fds[i]);
         close(cfd);
         return;
+    }
+    for (uint32_t i = fd_count; i < got_fds; i++) {
+        if (recv_fds[i] >= 0) close(recv_fds[i]);
+    }
+
+    if (fd_count > 0 && gmr_read_all(cfd, target_fds, sizeof(int32_t) * fd_count) != 0) {
+        for (uint32_t i = 0; i < fd_count; i++) if (recv_fds[i] >= 0) close(recv_fds[i]);
+        close(cfd);
+        return;
+    }
+    for (uint32_t i = 0; i < fd_count; i++) {
+        if (recv_fds[i] < 0 || target_fds[i] < 0 || target_fds[i] >= 64) {
+            for (uint32_t j = 0; j < fd_count; j++) if (recv_fds[j] >= 0) close(recv_fds[j]);
+            close(cfd);
+            return;
+        }
     }
 
     uint32_t c_argc = 0, c_envc = 0;
@@ -254,7 +281,7 @@ static void gmr_handle_client(int cfd) {
     if (!c_argv || c_argc == 0 || !c_envp) {
         gmr_free_vec(c_argv);
         gmr_free_vec(c_envp);
-        for (int i = 0; i < 3; i++) close(fds[i]);
+        for (uint32_t i = 0; i < fd_count; i++) if (recv_fds[i] >= 0) close(recv_fds[i]);
         close(cfd);
         return;
     }
@@ -262,11 +289,19 @@ static void gmr_handle_client(int cfd) {
     signal(SIGCHLD, SIG_DFL);
     pid_t cmd_pid = fork();
     if (cmd_pid == 0) {
-        dup2(fds[0], STDIN_FILENO);
-        dup2(fds[1], STDOUT_FILENO);
-        dup2(fds[2], STDERR_FILENO);
-        for (int i = 0; i < 3; i++) {
-            if (fds[i] > STDERR_FILENO) close(fds[i]);
+        int tmp_fds[GMR_MAX_FDS];
+        for (uint32_t i = 0; i < fd_count; i++) {
+            tmp_fds[i] = fcntl(recv_fds[i], F_DUPFD_CLOEXEC, 64);
+            if (tmp_fds[i] < 0) tmp_fds[i] = recv_fds[i];
+            else close(recv_fds[i]);
+        }
+        for (uint32_t i = 0; i < fd_count; i++) {
+            if (tmp_fds[i] != target_fds[i]) {
+                dup2(tmp_fds[i], target_fds[i]);
+                close(tmp_fds[i]);
+            } else {
+                fcntl(target_fds[i], F_SETFD, 0);
+            }
         }
         close(cfd);
         setgid(0);
@@ -280,7 +315,9 @@ static void gmr_handle_client(int cfd) {
         _exit(127);
     }
 
-    for (int i = 0; i < 3; i++) close(fds[i]);
+    for (uint32_t i = 0; i < fd_count; i++) {
+        if (recv_fds[i] >= 0) close(recv_fds[i]);
+    }
     gmr_free_vec(c_argv);
     gmr_free_vec(c_envp);
 
