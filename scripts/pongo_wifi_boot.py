@@ -141,7 +141,7 @@ def ensure_local_server() -> None:
 
 def find_block_file(explicit: str = "") -> Path:
     if explicit:
-        p = Path(explicit)
+        p = Path(explicit).resolve()
         if not p.is_file():
             raise FileNotFoundError(f"Block file not found: {p}")
         return p

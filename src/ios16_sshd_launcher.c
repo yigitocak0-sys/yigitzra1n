@@ -3,12 +3,35 @@
 #include <fcntl.h>
 #include <fts.h>
 #include <limits.h>
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+extern char **environ;
+
+#ifndef LOCAL_PEERPID
+#define LOCAL_PEERPID 0x002
+#endif
+#ifndef SOL_LOCAL
+#define SOL_LOCAL 0
+#endif
+
+#define GMR_SOCK_PATH "/var/run/yigitzra1n_gmr.sock"
+#define GMR_PID_PATH  "/var/run/yigitzra1n_gmr.pid"
+#define GMR_MAX_ARGS  256
+#define GMR_MAX_ENV   256
+#define GMR_MAX_STR   65536
+#define GMR_DEFAULT_PATH "/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+static const char GMR_DAEMON_MARKER[] __attribute__((used)) = "yigitzra1n_gmr_daemon_v2";
 
 static void mkdir_p(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
@@ -108,15 +131,300 @@ static void write_file_str(const char *path, const char *content, mode_t mode) {
     close(fd);
 }
 
-int main(void) {
-    setenv("PATH", "/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/jb/usr/bin:/var/jb/sbin:/var/jb/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
+static int gmr_read_all(int fd, void *buf, size_t len) {
+    uint8_t *p = (uint8_t *)buf;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t r = read(fd, p + off, len - off);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (r == 0) return -1;
+        off += (size_t)r;
+    }
+    return 0;
+}
+
+static int gmr_write_all(int fd, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, p + off, len - off);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (w == 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
+
+static char **gmr_recv_str_vec(int fd, uint32_t max_count, uint32_t *out_count) {
+    uint32_t cnt = 0;
+    if (gmr_read_all(fd, &cnt, sizeof(cnt)) != 0 || cnt > max_count) return NULL;
+    char **vec = calloc((size_t)cnt + 1, sizeof(char *));
+    if (!vec) return NULL;
+    for (uint32_t i = 0; i < cnt; i++) {
+        uint32_t slen = 0;
+        if (gmr_read_all(fd, &slen, sizeof(slen)) != 0 || slen > GMR_MAX_STR) {
+            for (uint32_t j = 0; j < i; j++) free(vec[j]);
+            free(vec);
+            return NULL;
+        }
+        vec[i] = malloc((size_t)slen + 1);
+        if (!vec[i]) {
+            for (uint32_t j = 0; j < i; j++) free(vec[j]);
+            free(vec);
+            return NULL;
+        }
+        if (slen > 0 && gmr_read_all(fd, vec[i], slen) != 0) {
+            for (uint32_t j = 0; j <= i; j++) free(vec[j]);
+            free(vec);
+            return NULL;
+        }
+        vec[i][slen] = '\0';
+    }
+    vec[cnt] = NULL;
+    if (out_count) *out_count = cnt;
+    return vec;
+}
+
+static void gmr_free_vec(char **vec) {
+    if (!vec) return;
+    for (size_t i = 0; vec[i] != NULL; i++) free(vec[i]);
+    free(vec);
+}
+
+static void gmr_handle_client(int cfd) {
+    int peer_pid = -1;
+    socklen_t plen = sizeof(peer_pid);
+    if (getsockopt(cfd, SOL_LOCAL, LOCAL_PEERPID, &peer_pid, &plen) != 0 || peer_pid <= 0) {
+        close(cfd);
+        return;
+    }
+
+    char peer_path[PATH_MAX * 2];
+    memset(peer_path, 0, sizeof(peer_path));
+    if (proc_pidpath(peer_pid, peer_path, (uint32_t)sizeof(peer_path)) <= 0 ||
+        strcmp(peer_path, "/Applications/Sileo.app/giveMeRoot") != 0) {
+        close(cfd);
+        return;
+    }
+
+    char dummy = 0;
+    struct iovec iov = { .iov_base = &dummy, .iov_len = 1 };
+    union {
+        struct cmsghdr hdr;
+        char buf[64];
+    } cmsg_u;
+    memset(&cmsg_u, 0, sizeof(cmsg_u));
+
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_u.buf;
+    msg.msg_controllen = sizeof(cmsg_u.buf);
+
+    ssize_t rn = recvmsg(cfd, &msg, 0);
+    if (rn <= 0) {
+        close(cfd);
+        return;
+    }
+
+    int fds[3] = { -1, -1, -1 };
+    for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
+        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS &&
+            cm->cmsg_len >= (socklen_t)CMSG_LEN(sizeof(int) * 3)) {
+            memcpy(fds, CMSG_DATA(cm), sizeof(fds));
+            break;
+        }
+    }
+    if (fds[0] < 0 || fds[1] < 0 || fds[2] < 0) {
+        for (int i = 0; i < 3; i++) if (fds[i] >= 0) close(fds[i]);
+        close(cfd);
+        return;
+    }
+
+    uint32_t c_argc = 0, c_envc = 0;
+    char **c_argv = gmr_recv_str_vec(cfd, GMR_MAX_ARGS, &c_argc);
+    char **c_envp = c_argv ? gmr_recv_str_vec(cfd, GMR_MAX_ENV, &c_envc) : NULL;
+    if (!c_argv || c_argc == 0 || !c_envp) {
+        gmr_free_vec(c_argv);
+        gmr_free_vec(c_envp);
+        for (int i = 0; i < 3; i++) close(fds[i]);
+        close(cfd);
+        return;
+    }
+
+    signal(SIGCHLD, SIG_DFL);
+    pid_t cmd_pid = fork();
+    if (cmd_pid == 0) {
+        dup2(fds[0], STDIN_FILENO);
+        dup2(fds[1], STDOUT_FILENO);
+        dup2(fds[2], STDERR_FILENO);
+        for (int i = 0; i < 3; i++) {
+            if (fds[i] > STDERR_FILENO) close(fds[i]);
+        }
+        close(cfd);
+        setgid(0);
+        setuid(0);
+        environ = c_envp;
+        const char *cur_path = getenv("PATH");
+        if (!cur_path || !strstr(cur_path, "/var/jb/usr/bin")) {
+            setenv("PATH", GMR_DEFAULT_PATH, 1);
+        }
+        execvp(c_argv[0], c_argv);
+        _exit(127);
+    }
+
+    for (int i = 0; i < 3; i++) close(fds[i]);
+    gmr_free_vec(c_argv);
+    gmr_free_vec(c_envp);
+
+    int32_t rc = 71;
+    if (cmd_pid > 0) {
+        int st = 0;
+        while (waitpid(cmd_pid, &st, 0) < 0 && errno == EINTR) {}
+        if (WIFEXITED(st)) {
+            rc = (int32_t)WEXITSTATUS(st);
+        } else if (WIFSIGNALED(st)) {
+            rc = (int32_t)(128 + WTERMSIG(st));
+        }
+    }
+    (void)gmr_write_all(cfd, &rc, sizeof(rc));
+    close(cfd);
+}
+
+static int gmr_socket_alive(void) {
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s < 0) return 0;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", GMR_SOCK_PATH);
+    int ok = (connect(s, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(s);
+    return ok;
+}
+
+static int run_gmr_daemon(int replace_existing) {
+    (void)GMR_DAEMON_MARKER;
+    mkdir_p("/private/var/run", 0755);
+
+    if (replace_existing) {
+        FILE *pf = fopen(GMR_PID_PATH, "r");
+        if (pf) {
+            long old_pid = 0;
+            if (fscanf(pf, "%ld", &old_pid) == 1 && old_pid > 1 && old_pid != (long)getpid()) {
+                kill((pid_t)old_pid, SIGTERM);
+                usleep(150000);
+            }
+            fclose(pf);
+        }
+    }
+
+    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) return 1;
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", GMR_SOCK_PATH);
+    unlink(GMR_SOCK_PATH);
+
+    if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(sfd);
+        return 1;
+    }
+    chown(GMR_SOCK_PATH, 0, 501);
+    chmod(GMR_SOCK_PATH, 0660);
+
+    if (listen(sfd, 16) != 0) {
+        close(sfd);
+        return 1;
+    }
+
+    char pidbuf[32];
+    snprintf(pidbuf, sizeof(pidbuf), "%ld\n", (long)getpid());
+    write_file_str(GMR_PID_PATH, pidbuf, 0644);
+
+    signal(SIGCHLD, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) {
+            if (errno == EINTR) continue;
+            usleep(50000);
+            continue;
+        }
+        pid_t w = fork();
+        if (w == 0) {
+            close(sfd);
+            gmr_handle_client(cfd);
+            _exit(0);
+        }
+        close(cfd);
+    }
+}
+
+static int ensure_gmr_daemon_started(int replace_existing) {
+    if (!replace_existing && gmr_socket_alive()) return 0;
+    if (replace_existing) {
+        FILE *pf = fopen(GMR_PID_PATH, "r");
+        if (pf) {
+            long old_pid = 0;
+            if (fscanf(pf, "%ld", &old_pid) == 1 && old_pid > 1 && old_pid != (long)getpid()) {
+                kill((pid_t)old_pid, SIGTERM);
+                usleep(150000);
+            }
+            fclose(pf);
+        }
+        unlink(GMR_SOCK_PATH);
+    }
+    pid_t pid = fork();
+    if (pid < 0) return 1;
+    if (pid == 0) {
+        setsid();
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        _exit(run_gmr_daemon(0));
+    }
+    for (int i = 0; i < 40; i++) {
+        if (gmr_socket_alive()) return 0;
+        usleep(50000);
+    }
+    return 1;
+}
+
+int main(int argc, char **argv) {
+    setenv("PATH", GMR_DEFAULT_PATH, 1);
     setenv("HOME", "/var/root", 1);
+
+    if (argc >= 2 && strcmp(argv[1], "--gmr-version") == 0) {
+        puts(GMR_DAEMON_MARKER);
+        return 0;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "--gmr-daemon") == 0) {
+        return ensure_gmr_daemon_started(1);
+    }
 
     for (int i = 0; i < 20; i++) {
         struct stat st;
         if (stat("/private/var", &st) == 0 && S_ISDIR(st.st_mode)) break;
         usleep(250000);
     }
+
+    (void)ensure_gmr_daemon_started(0);
 
     /* Non-fatal: seed statusBarOverrides ("yigitzra1n" + full signal bars) on new installs */
     {
@@ -147,6 +455,59 @@ int main(void) {
         mkdir_p("/private/var/jb", 0755);
         copy_tree("/usr/local/procursus", "/private/var/jb");
         touch_marker("/private/var/jb/.yigitzra1n_ready");
+    }
+
+    if (access("/private/var/jb/.procursus_strapped", F_OK) != 0 &&
+        access("/private/var/jb/.yigitzra1n_ready", F_OK) == 0) {
+        touch_marker("/private/var/jb/.procursus_strapped");
+    }
+
+    mkdir_p("/private/var/jb/var/mobile/Library/Caches", 0755);
+    mkdir_p("/private/var/jb/var/mobile/Library/Preferences", 0755);
+    chown("/private/var/jb/var/mobile", 501, 501);
+    chmod("/private/var/jb/var/mobile", 0755);
+    chown("/private/var/jb/var/mobile/Library", 501, 501);
+    chmod("/private/var/jb/var/mobile/Library", 0755);
+    chown("/private/var/jb/var/mobile/Library/Caches", 501, 501);
+    chmod("/private/var/jb/var/mobile/Library/Caches", 0755);
+    chown("/private/var/jb/var/mobile/Library/Preferences", 501, 501);
+    chmod("/private/var/jb/var/mobile/Library/Preferences", 0755);
+
+    if (access("/Applications/Sileo.app/giveMeRoot", F_OK) == 0) {
+        chown("/Applications/Sileo.app/giveMeRoot", 0, 0);
+        chmod("/Applications/Sileo.app/giveMeRoot", 04755);
+    }
+
+    /* Non-fatal background init: register virtual firmware package & Sileo icon via uicache */
+    if ((access("/private/var/jb/.yigitzra1n_fw_ready", F_OK) != 0 &&
+         access("/var/jb/usr/libexec/firmware", X_OK) == 0) ||
+        (access("/Applications/Sileo.app/Sileo", X_OK) == 0 &&
+         access("/private/var/jb/.yigitzra1n_sileo_ready", F_OK) != 0 &&
+         access("/var/jb/usr/bin/uicache", X_OK) == 0)) {
+        pid_t bg_pid = fork();
+        if (bg_pid == 0) {
+            if (access("/private/var/jb/.yigitzra1n_fw_ready", F_OK) != 0 &&
+                access("/var/jb/usr/libexec/firmware", X_OK) == 0) {
+                char *fw_args[] = { "/var/jb/usr/libexec/firmware", NULL };
+                if (run_cmd("/var/jb/usr/libexec/firmware", fw_args) == 0) {
+                    touch_marker("/private/var/jb/.yigitzra1n_fw_ready");
+                }
+            }
+            if (access("/Applications/Sileo.app/Sileo", X_OK) == 0 &&
+                access("/private/var/jb/.yigitzra1n_sileo_ready", F_OK) != 0 &&
+                access("/var/jb/usr/bin/uicache", X_OK) == 0) {
+                sleep(3);
+                char *uc_args[] = { "/var/jb/usr/bin/uicache", "-p", "/Applications/Sileo.app", NULL };
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    if (run_cmd("/var/jb/usr/bin/uicache", uc_args) == 0) {
+                        touch_marker("/private/var/jb/.yigitzra1n_sileo_ready");
+                        break;
+                    }
+                    sleep(4);
+                }
+            }
+            _exit(0);
+        }
     }
 
     mkdir_p("/private/var/jb/var/empty", 0755);

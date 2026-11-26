@@ -144,12 +144,18 @@ run_logged "$LINENO" "${CLANG[@]}" "$ROOT_DIR/src/ios16_skip_setup.c" -o "$BIN_D
 run_logged "$LINENO" codesign -f -s - -i com.apple.purplebuddy --entitlements "$ROOT_DIR/entitlements/ios16_skip_setup.entitlements.plist" \
   "$BIN_DIR/ios16_skip_setup"
 
-CURRENT_STEP="11/11 soft_aks.o"
-echo "[11/11] Building soft_aks.o (SEP-less securityd software AKS helper, size-optimized)..."
+CURRENT_STEP="11/12 soft_aks.o"
+echo "[11/12] Building soft_aks.o (SEP-less securityd software AKS helper, size-optimized)..."
 run_logged "$LINENO" clang -isysroot "$IOS_SDK" -target arm64-apple-ios15.0 -Os -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
   -Wall -Wextra -c "$ROOT_DIR/src/soft_aks.c" -o "$BIN_DIR/soft_aks.o"
 
-for f in sn2400_charger_daemon libn71m_avgestalt.dylib libn71m_tipsmodel.dylib sleepd_stub ios16_sshd_launcher ssh_rd_init rd_reset_apfs ios16_skip_setup soft_aks.o hw_init_probe.bin fast_dns.dylib; do
+CURRENT_STEP="12/12 yigitzra1n_givemeroot"
+echo "[12/12] Building yigitzra1n_givemeroot (Sileo root bridge for nosuid RootFS)..."
+run_logged "$LINENO" "${CLANG[@]}" "$ROOT_DIR/src/yigitzra1n_givemeroot.c" -o "$BIN_DIR/yigitzra1n_givemeroot"
+run_logged "$LINENO" codesign -f -s - --entitlements "$ROOT_DIR/entitlements/givemeroot.entitlements.plist" \
+  "$BIN_DIR/yigitzra1n_givemeroot"
+
+for f in sn2400_charger_daemon libn71m_avgestalt.dylib libn71m_tipsmodel.dylib sleepd_stub ios16_sshd_launcher ssh_rd_init rd_reset_apfs ios16_skip_setup soft_aks.o hw_init_probe.bin fast_dns.dylib yigitzra1n_givemeroot; do
   ln -sf "bin/$f" "$BUILD_DIR/$f"
 done
 

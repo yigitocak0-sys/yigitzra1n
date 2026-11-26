@@ -472,62 +472,69 @@ if [[ -f "$BS_ZST" ]]; then
   SSH_STAGE="$TMP_WORK/ssh_stage"
   mkdir -p "$SSH_STAGE"
   "$ZSTD_BIN" -dc "$BS_ZST" | tar -C "$SSH_STAGE" -xf -
-  if [[ -d "$PROCURSUS_DIR/debs" ]]; then
-    for deb in "$PROCURSUS_DIR/debs"/*.deb; do
-      [[ -f "$deb" ]] || continue
-      (
-        td="$(mktemp -d "$TMP_WORK/deb.XXXXXX")"
-        cd "$td"
-        ar x "$deb"
-        for dtar in data.tar.*; do
-          case "$dtar" in
-            *.zst) "$ZSTD_BIN" -dc "$dtar" | tar -C "$SSH_STAGE" -xf - ;;
-            *.xz)  tar -C "$SSH_STAGE" -xJf "$dtar" ;;
-            *.gz)  tar -C "$SSH_STAGE" -xzf "$dtar" ;;
-          esac
-        done
-      )
-    done
-  fi
   if [[ -d "$SSH_STAGE/var/jb" ]]; then
-    "$VENV_PY" - "$SSH_STAGE/var/jb" "$ROOT_DIR/entitlements/sshd_launcher.entitlements.plist" <<'PY'
-import os, subprocess, sys
-from pathlib import Path
+    "$VENV_PY" "$ROOT_DIR/scripts/stage_procursus_debs.py" \
+      --stage-root "$SSH_STAGE/var/jb" \
+      --deb-dir "$PROCURSUS_DIR/debs" \
+      --fallback-ent "$ROOT_DIR/entitlements/sshd_launcher.entitlements.plist"
 
-sys.path.insert(0, str(Path(sys.argv[2]).resolve().parent.parent / "scripts"))
-import importlib.util
-spec = importlib.util.spec_from_file_location("rd_mod", str(Path(sys.argv[2]).resolve().parent.parent / "scripts/05_build_ramdisk.py"))
-rd_mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(rd_mod)
+    if [[ -d "$SSH_STAGE/var/jb/Applications/Sileo.app" ]]; then
+      rm -rf "$MNT_R16/Applications/Sileo.app"
+      ditto "$SSH_STAGE/var/jb/Applications/Sileo.app" "$MNT_R16/Applications/Sileo.app"
+      chown -R root:wheel "$MNT_R16/Applications/Sileo.app"
+      chmod 755 "$MNT_R16/Applications/Sileo.app" "$MNT_R16/Applications/Sileo.app/Sileo" 2>/dev/null || true
+      if [[ -f "$BIN_DIR/yigitzra1n_givemeroot" ]]; then
+        cp -f "$BIN_DIR/yigitzra1n_givemeroot" "$MNT_R16/Applications/Sileo.app/giveMeRoot"
+      fi
+      if [[ -f "$MNT_R16/Applications/Sileo.app/giveMeRoot" ]]; then
+        chown root:wheel "$MNT_R16/Applications/Sileo.app/giveMeRoot"
+        chmod 4755 "$MNT_R16/Applications/Sileo.app/giveMeRoot"
+      fi
+      rm -rf "$SSH_STAGE/var/jb/Applications/Sileo.app"
+      ln -sfn "/Applications/Sileo.app" "$SSH_STAGE/var/jb/Applications/Sileo.app"
+      echo "[+] Installed Sileo.app into /Applications/Sileo.app (giveMeRoot setuid) + /var/jb/Applications symlink"
+    fi
 
-jb = Path(sys.argv[1])
-ent = Path(sys.argv[2])
-rd_mod.configure_procursus_users_and_shells(jb)
-
-apt_conf_d = jb / "etc/apt/apt.conf.d"
-apt_conf_d.mkdir(parents=True, exist_ok=True)
-(apt_conf_d / "01-procursus-bins.conf").write_text(
-    'Dir::Bin::gzip "/var/jb/usr/bin/gzip";\n'
-    'Dir::Bin::bzip2 "/var/jb/usr/bin/bzip2";\n'
-    'Dir::Bin::xz "/var/jb/usr/bin/xz";\n'
-    'Dir::Bin::zstd "/var/jb/usr/bin/zstd";\n',
-    encoding="utf-8",
-)
-
-signed = 0
-for p in jb.rglob("*"):
-    if rd_mod.is_macho(p):
-        if p.suffix == ".dylib" or ".dylib." in p.name:
-            rd_mod.sign_binary(p, None)
-        else:
-            rd_mod.sign_binary(p, ent)
-        signed += 1
-print(f"[+] Configured Procursus users/shells & ad-hoc signed {signed} Mach-O files")
-PY
     rm -rf "$MNT_R16/usr/local/procursus"
     mkdir -p "$MNT_R16/usr/local/procursus"
     ditto "$SSH_STAGE/var/jb" "$MNT_R16/usr/local/procursus"
     chown -R root:wheel "$MNT_R16/usr/local/procursus"
+    mkdir -p "$MNT_R16/usr/local/procursus/var/mobile/Library/Caches" "$MNT_R16/usr/local/procursus/var/mobile/Library/Preferences" "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d"
+    cat > "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources" <<'SRCS'
+Types: deb
+URIs: https://havoc.app/
+Suites: ./
+Components:
+
+Types: deb
+URIs: https://repo.chariz.com/
+Suites: ./
+Components:
+
+Types: deb
+URIs: https://ellekit.space/
+Suites: ./
+Components:
+Trusted: yes
+
+Types: deb
+URIs: https://opa334.github.io/
+Suites: ./
+Components:
+Trusted: yes
+
+Types: deb
+URIs: http://apt.thebigboss.org/repofiles/cydia/
+Suites: stable
+Components: main
+Trusted: yes
+SRCS
+    chown root:wheel "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources"
+    chmod 644 "$MNT_R16/usr/local/procursus/etc/apt/sources.list.d/sileo.sources"
+    : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_ready"
+    : > "$MNT_R16/usr/local/procursus/.yigitzra1n_repos_v2_ready"
+    chown -R 501:501 "$MNT_R16/usr/local/procursus/var/mobile"
+    chmod 755 "$MNT_R16/usr/local/procursus/var/mobile" "$MNT_R16/usr/local/procursus/var/mobile/Library" "$MNT_R16/usr/local/procursus/var/mobile/Library/Caches" "$MNT_R16/usr/local/procursus/var/mobile/Library/Preferences"
     chmod 600 "$MNT_R16/usr/local/procursus/etc/master.passwd" 2>/dev/null || true
     chmod 755 "$MNT_R16/usr/local/procursus/var/empty" 2>/dev/null || true
 
@@ -535,7 +542,7 @@ PY
     ln -sf "/var/jb/usr/bin/bash" "$MNT_R16/bin/bash"
     ln -sf "/var/jb/usr/libexec/sftp-server" "$MNT_R16/usr/libexec/sftp-server"
     ln -sfn "/var/jb/etc/apt" "$MNT_R16/private/etc/apt"
-    for tool in env apt apt-get apt-cache dpkg plutil; do
+    for tool in env apt apt-get apt-cache dpkg plutil uicache sbreload; do
       [[ -e "$MNT_R16/usr/bin/$tool" ]] || ln -sf "/var/jb/usr/bin/$tool" "$MNT_R16/usr/bin/$tool"
     done
     cat > "$MNT_R16/private/etc/profile" <<'PROF'
@@ -543,7 +550,7 @@ export PATH="/var/jb/usr/local/sbin:/var/jb/usr/local/bin:/var/jb/usr/sbin:/var/
 PROF
     chown root:wheel "$MNT_R16/private/etc/profile"
     chmod 644 "$MNT_R16/private/etc/profile"
-    echo "[+] Embedded signed Procursus OpenSSH + RootFS /bin/sh & /usr/libexec/sftp-server symlinks"
+    echo "[+] Embedded signed Procursus OpenSSH + Sileo + uikittools & RootFS symlinks"
   fi
 fi
 

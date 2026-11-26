@@ -141,7 +141,7 @@ if [[ "$SKIP_DOWNLOAD" -eq 0 ]]; then
   export TELEMETRY_MARKER_FILE="${TELEMETRY_MARKER_FILE:-$ROOT_DIR/build/.tmp/.telemetry_reported}"
   telemetry_run_py "resolve_procursus_debs.py" \
     --cache-dir "$PROCURSUS_DIR" \
-    --packages openssh-server openssh-sftp-server openssh-client bash coreutils gzip zstd tar findutils grep sed curl nano lsof less
+    --packages openssh-server openssh-sftp-server openssh-client bash coreutils gzip zstd tar findutils grep sed curl nano lsof less uikittools org.coolstar.sileo
 else
   echo "[*] Skipping Procursus fetch (--skip-download)."
 fi

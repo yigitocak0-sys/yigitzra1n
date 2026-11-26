@@ -20,10 +20,12 @@ FORCE=0
 SKIP_DOWNLOAD=0
 QUIET=0
 NO_UPDATE=0
+SKIP_SILEO=0
 BLOCK_PATH=""
 BOOT_ARGS=""
 DEVICE_HOST="127.0.0.1"
 DEVICE_PORT="2222"
+PORT_EXPLICIT=0
 IC_INFO=""
 MESSAGE_PARTS=()
 ORIG_ARGS=("$@")
@@ -39,7 +41,8 @@ Commands:
                 and build all patched images (kernel v6, DeviceTree v5, RamDisks, Hybrid RootFS).
   install       Interactive guided restore & permanent boot-block setup (prompts for DFU mode).
   boot          Tethered boot an installed iPhone 6s into iOS 16.7.16 (verbose logs + centered
-                yigitzra1n logo by default; pass --quiet to hide kernel text).
+                yigitzra1n logo by default; auto-installs Sileo, repos & status bar; --quiet hides text).
+  sileo         Install/update Sileo, default repos & yigitzra1n status bar over USB SSH (no reboot needed).
   ssh-ramdisk   Boot the maintenance OpenSSH RamDisk (port 22 over USB via iproxy).
   uninstall     Reset the unencrypted iOS 16 APFS container (/dev/disk0s1) via SSH RamDisk so
                 stock iOS 15.8.8 restores cleanly without iTunes/Finder Error 9.
@@ -57,10 +60,11 @@ Options:
   --no-update        Skip automatic GitHub update check on startup
   --quiet, -q        Disable verbose kernel boot console (-v)
   --verbose          Explicitly enable verbose kernel boot console (-v, default)
+  --skip-sileo       Skip post-boot Sileo check/install over USB SSH
   --block PATH       Explicit path to device boot block (.bin)
   --boot-args STR    Custom kernel boot-args for `boot`
-  --host IP          SSH host for `patch-device` / `activate` (default: 127.0.0.1)
-  --port PORT        SSH port for `patch-device` / `activate` (default: 2222)
+  --host IP          SSH host for `sileo` / `patch-device` / `activate` (default: 127.0.0.1)
+  --port PORT        SSH port for `sileo` / `patch-device` / `activate` (default: 2222 / auto USB)
   --ic-info PATH     Install your device's FairPlay IC-Info.sisv during `patch-device`
 EOF
 }
@@ -80,10 +84,11 @@ while [[ $# -gt 0 ]]; do
     --no-update) NO_UPDATE=1; shift ;;
     --quiet|-q) QUIET=1; shift ;;
     --verbose) QUIET=0; shift ;;
+    --skip-sileo) SKIP_SILEO=1; shift ;;
     --block) BLOCK_PATH="$2"; shift 2 ;;
     --boot-args) BOOT_ARGS="$2"; shift 2 ;;
     --host) DEVICE_HOST="$2"; shift 2 ;;
-    --port) DEVICE_PORT="$2"; shift 2 ;;
+    --port) DEVICE_PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
     --ic-info) IC_INFO="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -144,13 +149,30 @@ run_self_update() {
   return 0
 }
 
+print_legacy_sileo_notice() {
+  cat <<'NOTICE'
+----------------------------------------------------------------------
+  [NOTICE] Updating from an older yigitzra1n version?
+    * Already booted into iOS 16? Run:  ./yigitzra1n.sh sileo
+      (Installs Sileo, 5 default repos & the 'yigitzra1n' status bar over USB — no reboot!)
+    * Or run './yigitzra1n.sh boot' as usual — it installs them automatically on boot.
+----------------------------------------------------------------------
+NOTICE
+}
+
 if [[ "$CMD" == "update" ]]; then
   run_self_update "apply"
-  exit $?
+  upd_exit=$?
+  [[ "$upd_exit" -eq 0 ]] && print_legacy_sileo_notice
+  exit "$upd_exit"
 fi
 
 if [[ "$CMD" != "clean" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
   run_self_update "auto"
+fi
+
+if [[ "${YIGITZRA1N_UPDATED:-0}" == "1" && "$CMD" != "sileo" ]]; then
+  print_legacy_sileo_notice
 fi
 
 export TELEMETRY_CMD="$CMD"
@@ -866,6 +888,9 @@ cmd_boot() {
   }
   ensure_patched_engine
   ensure_n71ap_devicetree
+  if [[ "$SKIP_SILEO" -eq 0 && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
+    print_legacy_sileo_notice
+  fi
   prompt_dfu "Tethered Boot — iOS 16.7.16 (DFU Mode)"
   local py_args=()
   [[ -n "$BLOCK_PATH" ]] && py_args+=(--block "$BLOCK_PATH")
@@ -875,6 +900,19 @@ cmd_boot() {
   YIGITZRA1N_IPSW_DIR="$IPSW_DIR" telemetry_run_py "pongo_wifi_boot.py" ${py_args[@]+"${py_args[@]}"}
   if [[ "$TELEMETRY_CMD" == "boot" ]]; then
     telemetry_send "install_success" "boot" "BOOT_DONE" "yigitzra1n.sh" "$LINENO" 0 "booted" ""
+  fi
+  if [[ "$SKIP_SILEO" -eq 0 ]]; then
+    local no_boot_flag=0
+    for _a in ${py_args[@]+"${py_args[@]}"}; do
+      [[ "$_a" == "--no-boot" ]] && no_boot_flag=1
+    done
+    if [[ "$no_boot_flag" -eq 0 ]]; then
+      (
+        set +e
+        trap - ERR
+        PROCURSUS_DIR="$PROCURSUS_DIR" SILEO_REQUIRE_SSH=0 bash "$ROOT_DIR/scripts/provision_sileo.sh"
+      ) || echo "[!] Non-fatal Sileo check/install skipped; boot succeeded." >&2
+    fi
   fi
 }
 
@@ -1149,6 +1187,16 @@ cmd_activate() {
     bash "$ROOT_DIR/scripts/activate_device.sh"
 }
 
+cmd_sileo() {
+  TELEMETRY_STEP="SILEO"
+  check_macos_host
+  ensure_python_venv
+  local sileo_port=""
+  [[ "$PORT_EXPLICIT" -eq 1 ]] && sileo_port="$DEVICE_PORT"
+  SILEO_REQUIRE_SSH=1 DEVICE_HOST="$DEVICE_HOST" DEVICE_PORT="$sileo_port" PROCURSUS_DIR="$PROCURSUS_DIR" \
+    bash "$ROOT_DIR/scripts/provision_sileo.sh"
+}
+
 cmd_message() {
   TELEMETRY_STEP="MESSAGE"
   local msg_text=""
@@ -1187,6 +1235,7 @@ case "$CMD" in
   prepare)      cmd_prepare ;;
   install)      cmd_install ;;
   boot)         cmd_boot ;;
+  sileo)        cmd_sileo ;;
   ssh-ramdisk)  cmd_ssh_ramdisk ;;
   uninstall)    cmd_uninstall ;;
   activate)     cmd_activate ;;

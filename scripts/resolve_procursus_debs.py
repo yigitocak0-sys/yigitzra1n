@@ -30,7 +30,11 @@ DEFAULT_PACKAGES = [
     "lsof",
     "htop",
     "rsync",
+    "uikittools",
+    "org.coolstar.sileo",
 ]
+
+VIRTUAL_PACKAGES = {"firmware"}
 
 def sha256_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -175,18 +179,30 @@ def parse_installed_from_bootstrap(bootstrap_tar_zst: Path) -> set:
     if zstd_rc != 0 or tar_proc.returncode != 0:
         err_msg = (tar_proc.stderr or "").strip() or f"zstd rc={zstd_rc}, tar rc={tar_proc.returncode}"
         raise RuntimeError(f"Failed to read dpkg status from {bootstrap_tar_zst.name}: {err_msg}")
-    installed = set()
+    installed = {}
+    cur_pkg = ""
     for line in tar_proc.stdout.splitlines():
         if line.startswith("Package:"):
-            installed.add(line.split(":", 1)[1].strip())
+            cur_pkg = line.split(":", 1)[1].strip()
+            installed.setdefault(cur_pkg, "")
+        elif line.startswith("Version:") and cur_pkg:
+            installed[cur_pkg] = line.split(":", 1)[1].strip()
+        elif not line.strip():
+            cur_pkg = ""
     return installed
 
-def resolve_tree(wanted, db, provides_map, installed):
+def resolve_tree(wanted, db, provides_map, installed_versions):
     order = []
-    seen = set(installed)
+    wanted_set = set(wanted)
+    seen = set(VIRTUAL_PACKAGES)
+    for pkg, ver in installed_versions.items():
+        if pkg in wanted_set and pkg in db:
+            if _ver_key(db[pkg].get("Version", "")) > _ver_key(ver):
+                continue
+        seen.add(pkg)
 
     def walk(pkg):
-        if pkg in seen:
+        if pkg in seen or pkg.startswith(("gsc.", "cy+")):
             return
         if pkg not in db:
             if pkg in provides_map:
@@ -202,7 +218,7 @@ def resolve_tree(wanted, db, provides_map, installed):
             if not group:
                 continue
             alts = [re.split(r"[\s(:]", a.strip())[0] for a in group.split("|")]
-            if any(a in seen for a in alts):
+            if any(a in seen or a.startswith(("gsc.", "cy+")) for a in alts):
                 continue
             walk(alts[0])
         order.append(pkg)
