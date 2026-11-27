@@ -77,7 +77,7 @@ Connect your iPhone 6s booted normally into **iOS 15.8.8** (unlocked on the Home
 
 Follow the guided DFU prompts (supports automatic checkpoint resume if interrupted):
 1. **STEP 1/3 — DFU #1 (Device SHC Block):** Captures the A9 SHC block from iOS `15.8.8` (reused for both restore and daily SEP-less tethered boots).
-2. **STEP 2/3 — DFU #2 (NAND Restore):** Writes the hybrid iOS `16.7.16` RootFS & bootchain to NAND.
+2. **STEP 2/3 — DFU #2 (NAND Restore):** Writes the yigitzra1n RootFS & bootchain to NAND.
 3. **STEP 3/3 — First Boot:** Boots straight into iOS `16.7.16` using the captured SHC block.
 
 *(Tip: During DFU exploitation, if progress pauses for >10 seconds, unplug and replug the Lightning cable for 1 second to wake the USB state machine.)*

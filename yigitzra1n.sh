@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CALLER_PWD="${YIGITZRA1N_CALLER_PWD:-$PWD}"
 ORIG_ARGS=("$@")
 APP_HOME="${YIGITZRA1N_HOME:-$HOME/Library/Application Support/yigitzra1n}"
 BIN_DIR="${YIGITZRA1N_BIN_DIR:-$HOME/.local/bin}"
@@ -204,7 +205,7 @@ ensure_app_home_and_relocate() {
       printf '%s\n' "$root_real" > "$APP_HOME/.yigitzra1n_source_dir"
     fi
     ensure_global_launcher_and_path "$APP_HOME" "$root_real"
-    exec env YIGITZRA1N_FALLBACK_SRC="$root_real" "$APP_HOME/yigitzra1n.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+    exec env YIGITZRA1N_FALLBACK_SRC="$root_real" YIGITZRA1N_CALLER_PWD="$CALLER_PWD" "$APP_HOME/yigitzra1n.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
   fi
 
   if [[ "$root_real" == "$app_real" && ! -f "$APP_HOME/.yigitzra1n_installed" ]]; then
@@ -240,21 +241,32 @@ DEVICE_HOST="127.0.0.1"
 DEVICE_PORT="2222"
 PORT_EXPLICIT=0
 IC_INFO=""
+OUT_PATH=""
+ASSUME_YES=0
+LIST_MODE=0
+UNINSTALL_TARGET=""
+POS_ARG=""
 MESSAGE_PARTS=()
 
 usage() {
   cat <<'EOF'
-yigitzra1n — iOS 16.7.16 (20H392) for iPhone 6s (N71mAP / TSMC s8003)
+yigitzra1n — iOS 16.7.16 (20H392) for iPhone 6s (N71mAP / TSMC s8003, experimental Samsung s8000)
 
 Prerequisite: Your iPhone 6s must be running iOS 15.8.8 (19H422) before installation.
 
 Commands:
+  doctor        Check macOS tools, Brew packages, Python venv, IPSWs, boot block & connected device.
   prepare       Download (or reuse from ipsw/, symlinks supported) the 3 stock Apple IPSWs
                 and build all patched images (kernel v6, DeviceTree v5, RamDisks, Hybrid RootFS).
   install       Interactive guided restore & permanent boot-block setup (prompts for DFU mode).
   boot          Tethered boot an installed iPhone 6s into iOS 16.7.16 (verbose logs + centered
                 yigitzra1n logo by default; auto-installs Sileo & default repos; --quiet hides text).
   sileo         Install/update Sileo & default repos over USB SSH (no reboot needed).
+  sideload      Native IPA sideloader over USB SSH (`sideload <app.ipa> | --list | --uninstall <id>`).
+  panic-check   Pull all panic-full*.ips logs from the connected iOS 16 device to your Mac.
+  panic-send    Pull, zip, and send device panic-full logs to the developer after confirmation.
+  export-block  Export your saved SHC/PTE boot block to a backup path (`export-block [path]`).
+  import-block  Import a backed-up SHC/PTE boot block (`import-block <file.bin>`).
   ssh-ramdisk   Boot the maintenance OpenSSH RamDisk (port 22 over USB via iproxy).
   uninstall     Reset the unencrypted iOS 16 APFS container (/dev/disk0s1) via SSH RamDisk so
                 stock iOS 15.8.8 restores cleanly without iTunes/Finder Error 9.
@@ -269,16 +281,20 @@ Commands:
 Options:
   --ipsw-dir DIR     Custom directory containing the 3 stock Apple IPSWs (default: ./ipsw)
   --skip-download    Fail instead of downloading missing IPSWs/assets
-  --force            Override TSMC s8003 (0x8003) hardware guard (experimental for Samsung s8000)
+  --force            Override unsupported CPID safety guard
   --no-update        Skip automatic GitHub update check on startup
   --quiet, -q        Disable verbose kernel boot console (-v)
   --verbose          Explicitly enable verbose kernel boot console (-v, default)
   --skip-sileo       Skip post-boot Sileo check/install over USB SSH
   --block PATH       Explicit path to device boot block (.bin)
   --boot-args STR    Custom kernel boot-args for `boot`
-  --host IP          SSH host for `sileo` / `patch-device` / `activate` (default: 127.0.0.1)
-  --port PORT        SSH port for `sileo` / `patch-device` / `activate` (default: 2222 / auto USB)
+  --host IP          SSH host (default: 127.0.0.1)
+  --port PORT        SSH port (default: auto USB iproxy)
   --ic-info PATH     Install your device's FairPlay IC-Info.sisv during `patch-device`
+  --out PATH         Destination directory/file for `panic-check` or `export-block`
+  --yes, -y          Confirm prompt non-interactively (e.g. `panic-send`)
+  --list             List non-stock apps in /Applications (`sideload --list`)
+  --uninstall NAME   Remove a sideloaded app by name or bundle ID (`sideload --uninstall ...`)
 EOF
 }
 
@@ -291,22 +307,29 @@ shift
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ipsw-dir) IPSW_DIR="$2"; shift 2 ;;
+    --ipsw-dir) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; IPSW_DIR="$2"; shift 2 ;;
     --skip-download) SKIP_DOWNLOAD=1; shift ;;
     --force) FORCE=1; shift ;;
     --no-update) NO_UPDATE=1; shift ;;
     --quiet|-q) QUIET=1; shift ;;
     --verbose) QUIET=0; shift ;;
     --skip-sileo) SKIP_SILEO=1; shift ;;
-    --block) BLOCK_PATH="$2"; shift 2 ;;
-    --boot-args) BOOT_ARGS="$2"; shift 2 ;;
-    --host) DEVICE_HOST="$2"; shift 2 ;;
-    --port) DEVICE_PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
-    --ic-info) IC_INFO="$2"; shift 2 ;;
+    --block) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; BLOCK_PATH="$2"; shift 2 ;;
+    --boot-args) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; BOOT_ARGS="$2"; shift 2 ;;
+    --host) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; DEVICE_HOST="$2"; shift 2 ;;
+    --port) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; DEVICE_PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
+    --ic-info) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; IC_INFO="$2"; shift 2 ;;
+    --out) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; OUT_PATH="$2"; shift 2 ;;
+    --yes|-y) ASSUME_YES=1; shift ;;
+    --list) LIST_MODE=1; shift ;;
+    --uninstall) [[ $# -ge 2 ]] || { echo "[ERROR] Missing argument for $1" >&2; exit 2; }; UNINSTALL_TARGET="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       if [[ "$CMD" == "message" && "$1" != -* ]]; then
         MESSAGE_PARTS+=("$1")
+        shift
+      elif [[ ( "$CMD" == "sideload" || "$CMD" == "export-block" || "$CMD" == "import-block" || "$CMD" == "panic-check" ) && "$1" != -* && -z "$POS_ARG" ]]; then
+        POS_ARG="$1"
         shift
       else
         echo "[ERROR] Unknown option: $1" >&2
@@ -398,7 +421,7 @@ if [[ "$CMD" == "update" ]]; then
   exit "$upd_exit"
 fi
 
-if [[ "$CMD" != "clean" && "$CMD" != "version" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
+if [[ "$CMD" != "clean" && "$CMD" != "version" && "$CMD" != "doctor" && "$CMD" != "export-block" && "$CMD" != "import-block" && "$NO_UPDATE" -eq 0 && "${YIGITZRA1N_NO_UPDATE:-0}" != "1" && "${YIGITZRA1N_UPDATED:-0}" != "1" ]]; then
   run_self_update "auto"
 fi
 
@@ -499,8 +522,8 @@ detect_install_state() {
 
 state_label() {
   case "$1" in
-    STEP1_DONE)         echo "STEP 1/3 — Boot Block captured (Next: STEP 2/3 Hybrid iOS 16.7.16 NAND Restore)" ;;
-    STEP2_RESTORE_DONE) echo "STEP 2/3 — Hybrid iOS 16.7.16 NAND Restore finished (Next: STEP 3/3 First Boot)" ;;
+    STEP1_DONE)         echo "STEP 1/3 — Boot Block captured (Next: STEP 2/3 yigitzra1n NAND Restore)" ;;
+    STEP2_RESTORE_DONE) echo "STEP 2/3 — yigitzra1n NAND Restore finished (Next: STEP 3/3 First Boot)" ;;
     *)                  echo "$1" ;;
   esac
 }
@@ -857,7 +880,7 @@ cmd_prepare() {
     --out-ssh-tc "$BUILD_DIR/ssh_ramdisk.trustcache"
 
   TELEMETRY_STEP="PREPARE_7_ROOTFS"
-  echo ">>> [yigitzra1n 7/7] Building Hybrid iOS 16.7.16 RootFS & staging restore directory (requires sudo)..."
+  echo ">>> [yigitzra1n 7/7] Building yigitzra1n RootFS & staging restore directory (requires sudo)..."
   IPSW_DIR="$IPSW_DIR" bash "$ROOT_DIR/scripts/06_build_rootfs.sh"
 
   telemetry_send "install_success" "prepare" "PREPARE_DONE" "yigitzra1n.sh" "$LINENO" 0 "prepared" ""
@@ -1071,24 +1094,24 @@ cmd_install() {
     [[ "$(basename "$boot_blk" | tr '[:upper:]' '[:lower:]')" == *shcblock* ]] && restore_blk_flag="--load-shcblock"
 
     while true; do
-      prompt_dfu "STEP 2/3 — Write Hybrid iOS 16.7.16 to NAND (DFU #2)"
+      prompt_dfu "STEP 2/3 — Write yigitzra1n to NAND (DFU #2)"
       echo "[*] Entering pwnDFU..."
       if run_engine_clean ./bin/engine_helper -D; then
         echo "[*] Starting NAND restore (if exploit pauses >10s, briefly replug USB for 1 second)..."
         if DYLD_INSERT_LIBRARIES="$BUILD_DIR/bin/fast_dns.dylib" \
           run_engine_clean ./bin/engine_restore -y -o --allow-unsupport "$restore_blk_flag" "$boot_blk" "$BUILD_DIR/hybrid_ipsw"; then
-          echo "[+] Hybrid iOS 16.7.16 NAND restore completed!"
+          echo "[+] yigitzra1n NAND restore completed!"
           break
         fi
       fi
       local step2_err=""
       step2_err="$(collect_engine_failure_detail)"
-      telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_attempt_fail" "${step2_err:-Hybrid NAND restore failed}" 1
+      telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_attempt_fail" "${step2_err:-yigitzra1n NAND restore failed}" 1
       echo "[!] STEP 2/3 (NAND restore) failed." >&2
       printf "    Retry STEP 2/3? [Y/n]: "
       read -r retry_ans
       if [[ "${retry_ans:-Y}" =~ ^[Nn]$ ]]; then
-        telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_failed" "${step2_err:-Hybrid NAND restore failed}"
+        telemetry_send "install_fail" "install" "STEP2_RESTORE" "yigitzra1n.sh" "$LINENO" 1 "nand_restore_failed" "${step2_err:-yigitzra1n NAND restore failed}"
         telemetry_mark_reported
         exit 1
       fi
@@ -1099,8 +1122,9 @@ cmd_install() {
 
   TELEMETRY_STEP="STEP3_BOOT"
   echo ""
-  echo "[+] Hybrid iOS 16.7.16 is installed on NAND and your boot block is saved:"
+  echo "[+] yigitzra1n installed on NAND and your boot block is saved:"
   echo "    ${boot_blk:-$ENGINE_DIR/block/}"
+  echo "    Back it up anytime with: yigitzra1n export-block"
   echo ""
   printf "STEP 3/3 — Boot into iOS 16.7.16 now? [Y/n]: "
   read -r boot_ans
@@ -1136,18 +1160,25 @@ cmd_boot() {
   if [[ "$TELEMETRY_CMD" == "boot" ]]; then
     telemetry_send "install_success" "boot" "BOOT_DONE" "yigitzra1n.sh" "$LINENO" 0 "booted" ""
   fi
-  if [[ "$SKIP_SILEO" -eq 0 ]]; then
-    local no_boot_flag=0
-    for _a in ${py_args[@]+"${py_args[@]}"}; do
-      [[ "$_a" == "--no-boot" ]] && no_boot_flag=1
-    done
-    if [[ "$no_boot_flag" -eq 0 ]]; then
+  local no_boot_flag=0
+  for _a in ${py_args[@]+"${py_args[@]}"}; do
+    [[ "$_a" == "--no-boot" ]] && no_boot_flag=1
+  done
+  if [[ "$no_boot_flag" -eq 0 ]]; then
+    if [[ "$SKIP_SILEO" -eq 0 ]]; then
       (
         set +e
         trap - ERR
         PROCURSUS_DIR="$PROCURSUS_DIR" SILEO_REQUIRE_SSH=0 bash "$ROOT_DIR/scripts/provision_sileo.sh"
       ) || echo "[!] Non-fatal Sileo check/install skipped; boot succeeded." >&2
     fi
+    (
+      set +e
+      trap - ERR
+      cam_wait=45
+      [[ "$SKIP_SILEO" -eq 0 ]] && cam_wait=15
+      python3 "$ROOT_DIR/scripts/apply_camera_fix.py" --wait-tries "$cam_wait"
+    ) || true
   fi
 }
 
@@ -1467,11 +1498,87 @@ cmd_clean() {
   echo "[+] Clean complete."
 }
 
+cmd_doctor() {
+  TELEMETRY_STEP="DOCTOR"
+  local doc_rc=0
+  python3 "$ROOT_DIR/scripts/doctor.py" --root "$ROOT_DIR" --ipsw-dir "$IPSW_DIR" --caller-pwd "$CALLER_PWD" || doc_rc=$?
+  telemetry_mark_reported
+  return "$doc_rc"
+}
+
+cmd_export_block() {
+  TELEMETRY_STEP="EXPORT_BLOCK"
+  local target="${OUT_PATH:-$POS_ARG}"
+  python3 "$ROOT_DIR/scripts/shc_block.py" export \
+    --engine-dir "$ENGINE_DIR" \
+    --caller-pwd "$CALLER_PWD" \
+    --block "$BLOCK_PATH" \
+    --target "$target"
+}
+
+cmd_import_block() {
+  TELEMETRY_STEP="IMPORT_BLOCK"
+  local src="${POS_ARG:-$BLOCK_PATH}"
+  local args=(import --engine-dir "$ENGINE_DIR" --caller-pwd "$CALLER_PWD" --target "$src")
+  if [[ "$FORCE" -eq 1 ]]; then args+=(--force); fi
+  python3 "$ROOT_DIR/scripts/shc_block.py" "${args[@]}"
+}
+
+cmd_panic_check() {
+  TELEMETRY_STEP="PANIC_CHECK"
+  check_macos_host
+  local p_port=0
+  if [[ "$PORT_EXPLICIT" -eq 1 ]]; then p_port="$DEVICE_PORT"; fi
+  local dest="${OUT_PATH:-$POS_ARG}"
+  python3 "$ROOT_DIR/scripts/panic_tools.py" check \
+    --caller-pwd "$CALLER_PWD" \
+    --out "$dest" \
+    --host "$DEVICE_HOST" \
+    --port "$p_port" \
+    --url "${YIGITZRA1N_PANIC_URL:-${YIGITZRA1N_TELEMETRY_URL%/v1/event}/v1/panic}" \
+    --tool-version "$(telemetry_effective_version)"
+}
+
+cmd_panic_send() {
+  TELEMETRY_STEP="PANIC_SEND"
+  check_macos_host
+  local p_port=0
+  if [[ "$PORT_EXPLICIT" -eq 1 ]]; then p_port="$DEVICE_PORT"; fi
+  local args=(
+    send
+    --caller-pwd "$CALLER_PWD"
+    --host "$DEVICE_HOST"
+    --port "$p_port"
+    --url "${YIGITZRA1N_PANIC_URL:-${YIGITZRA1N_TELEMETRY_URL%/v1/event}/v1/panic}"
+    --tool-version "$(telemetry_effective_version)"
+  )
+  if [[ "$ASSUME_YES" -eq 1 || "$FORCE" -eq 1 ]]; then args+=(--yes); fi
+  python3 "$ROOT_DIR/scripts/panic_tools.py" "${args[@]}"
+}
+
+cmd_sideload() {
+  TELEMETRY_STEP="SIDELOAD"
+  check_macos_host
+  local p_port=0
+  if [[ "$PORT_EXPLICIT" -eq 1 ]]; then p_port="$DEVICE_PORT"; fi
+  local args=(--caller-pwd "$CALLER_PWD" --host "$DEVICE_HOST" --port "$p_port")
+  if [[ "$LIST_MODE" -eq 1 ]]; then args+=(--list); fi
+  if [[ -n "$UNINSTALL_TARGET" ]]; then args+=(--uninstall "$UNINSTALL_TARGET"); fi
+  if [[ -n "$POS_ARG" ]]; then args+=("$POS_ARG"); fi
+  python3 "$ROOT_DIR/scripts/sideload_ipa.py" "${args[@]}"
+}
+
 case "$CMD" in
+  doctor)       cmd_doctor ;;
   prepare)      cmd_prepare ;;
   install)      cmd_install ;;
   boot)         cmd_boot ;;
   sileo)        cmd_sileo ;;
+  sideload)     cmd_sideload ;;
+  panic-check)  cmd_panic_check ;;
+  panic-send)   cmd_panic_send ;;
+  export-block) cmd_export_block ;;
+  import-block) cmd_import_block ;;
   ssh-ramdisk)  cmd_ssh_ramdisk ;;
   uninstall)    cmd_uninstall ;;
   activate)     cmd_activate ;;

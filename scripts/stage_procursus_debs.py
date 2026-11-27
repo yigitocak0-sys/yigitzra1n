@@ -31,6 +31,8 @@ def is_macho(path: Path) -> bool:
 def sign_binary(binary_path: Path, ent_path: Path = None) -> None:
     subprocess.run(["/usr/bin/xattr", "-c", str(binary_path)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     cmd = ["codesign", "-f", "-s", "-"]
+    if binary_path.name == "Sileo":
+        cmd += ["--identifier", "org.coolstar.SileoStore"]
     if ent_path is not None:
         cmd += ["--entitlements", str(ent_path)]
     cmd.append(str(binary_path))
@@ -45,6 +47,8 @@ def sign_binary(binary_path: Path, ent_path: Path = None) -> None:
             shutil.copymode(binary_path, tmp_bin)
             subprocess.run(["/usr/bin/xattr", "-c", str(tmp_bin)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             tmp_cmd = ["codesign", "-f", "-s", "-"]
+            if binary_path.name == "Sileo":
+                tmp_cmd += ["--identifier", "org.coolstar.SileoStore"]
             if ent_path is not None:
                 tmp_cmd += ["--entitlements", str(ent_path)]
             tmp_cmd.append(str(tmp_bin))
@@ -54,6 +58,85 @@ def sign_binary(binary_path: Path, ent_path: Path = None) -> None:
                 return
             err_txt = (res2.stderr or res2.stdout).strip()
     raise RuntimeError(f"codesign failed for {binary_path}: {err_txt}")
+
+
+def patch_sileo_binary(sileo_path: Path) -> bool:
+    """Patch Sileo Mach-O so spawnAsRoot always uses giveMeRoot and Unknown JB falls back to Procursus."""
+    if not sileo_path.is_file() or not is_macho(sileo_path):
+        return False
+    data = bytearray(sileo_path.read_bytes())
+
+    # 1) In spawnAsRoot: force the pre-iOS-13 giveMeRoot branch instead of persona(99) spawn (ESRCH on our iOS 16 setup).
+    p1_prefix = bytes.fromhex("40008052a10180520200805203008052")
+    p1_suffix = bytes.fromhex("c80a40f9081300b4")
+    p1_matches = []
+    pos = 0
+    while True:
+        idx = data.find(p1_prefix, pos)
+        if idx == -1:
+            break
+        if idx + 32 <= len(data) and data[idx + 24 : idx + 32] == p1_suffix:
+            bl_insn = struct.unpack_from("<I", data, idx + 16)[0]
+            br_insn = struct.unpack_from("<I", data, idx + 20)[0]
+            if (bl_insn & 0xFC000000) == 0x94000000:
+                p1_matches.append((idx + 20, br_insn))
+        pos = idx + 4
+
+    if len(p1_matches) != 1:
+        raise RuntimeError(f"Expected 1 spawnAsRoot site in {sileo_path.name}, found {len(p1_matches)}")
+    br_off, br_insn = p1_matches[0]
+    changed = False
+    if (br_insn & 0xFF00001F) == 0x34000000:  # cbz w0, rel19
+        imm19 = (br_insn >> 5) & 0x7FFFF
+        if imm19 & 0x40000:
+            imm19 -= 0x80000
+        b_insn = 0x14000000 | (imm19 & 0x03FFFFFF)
+        struct.pack_into("<I", data, br_off, b_insn)
+        changed = True
+    elif (br_insn & 0xFC000000) != 0x14000000:
+        raise RuntimeError(f"Unexpected branch instruction at spawnAsRoot +{br_off:#x}: {br_insn:#x}")
+
+    # 2) In bootstrap detector: redirect Unknown Jailbreak (cmp w9, #0x13; b.hi unknown) to the /var/jb/.procursus_strapped Procursus check.
+    p2_raw = bytes.fromhex("3f4d00714805005468008052")
+    p2_patched = bytes.fromhex("3f4d00710801005468008052")
+    raw_hits = [i for i in range(0, len(data) - len(p2_raw) + 1) if data[i : i + len(p2_raw)] == p2_raw]
+    patched_hits = [i for i in range(0, len(data) - len(p2_patched) + 1) if data[i : i + len(p2_patched)] == p2_patched]
+    if len(raw_hits) == 1 and not patched_hits:
+        struct.pack_into("<I", data, raw_hits[0] + 4, 0x54000108)  # b.hi +0x20 (Procursus rootless check)
+        changed = True
+    elif len(patched_hits) == 1 and not raw_hits:
+        pass
+    else:
+        raise RuntimeError(
+            f"Expected unique bootstrap detector site in {sileo_path.name}, raw={len(raw_hits)} patched={len(patched_hits)}"
+        )
+
+    # 3) In APTWrapper.performOperations (inlined spawn): force __isPlatformVersionAtLeast(2, 13, 0, 0) -> 0
+    #    so Sileo prepends "giveMeRoot" and spawns giveMeRoot instead of persona(99) (which returns ESRCH silently).
+    p3_prefix = bytes.fromhex("40008052a10180520200805203008052")
+    p3_suffix = bytes.fromhex("fa0300aa764e00f9a0070034")
+    p3_matches = []
+    pos = 0
+    while True:
+        idx = data.find(p3_prefix, pos)
+        if idx == -1:
+            break
+        if idx + 32 <= len(data) and data[idx + 20 : idx + 32] == p3_suffix:
+            insn = struct.unpack_from("<I", data, idx + 16)[0]
+            if (insn & 0xFC000000) == 0x94000000 or insn == 0xD2800000:
+                p3_matches.append((idx + 16, insn))
+        pos = idx + 4
+
+    if len(p3_matches) != 1:
+        raise RuntimeError(f"Expected 1 APTWrapper persona site in {sileo_path.name}, found {len(p3_matches)}")
+    p3_off, p3_insn = p3_matches[0]
+    if p3_insn != 0xD2800000:  # mov x0, #0x0
+        struct.pack_into("<I", data, p3_off, 0xD2800000)
+        changed = True
+
+    if changed:
+        sileo_path.write_bytes(data)
+    return changed
 
 
 def load_ramdisk_helpers():
@@ -325,6 +408,10 @@ def main() -> int:
         )
 
     subprocess.run(["/usr/bin/xattr", "-cr", str(jb_root)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sileo_bin = jb_root / "Applications/Sileo.app/Sileo"
+    if sileo_bin.is_file():
+        if patch_sileo_binary(sileo_bin):
+            print("[+] Patched Sileo binary (giveMeRoot + Procursus rootless bootstrap detection)")
     fallback = Path(args.fallback_ent) if args.fallback_ent else None
     signed = resign_tree(jb_root, fallback)
     print(f"[+] Staged {len(meta_list)} debs & ad-hoc signed {signed} Mach-O files (entitlements preserved)")

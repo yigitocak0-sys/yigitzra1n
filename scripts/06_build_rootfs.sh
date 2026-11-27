@@ -292,6 +292,16 @@ rsync -a --ignore-existing "$MNT_R15/usr/share/firmware/" "$MNT_R16/usr/share/fi
 copy_if_exists "$MNT_R15/System/Library/ThermalMonitor/N71mAP-Info.plist" "$MNT_R16/System/Library/ThermalMonitor/N71mAP-Info.plist"
 copy_if_exists "$MNT_R15/System/Library/PrivateFrameworks/CMCapture.framework/N71" "$MNT_R16/System/Library/PrivateFrameworks/CMCapture.framework/N71"
 copy_if_exists "$MNT_R15/System/Library/PrivateFrameworks/CMCapture.framework/N71m" "$MNT_R16/System/Library/PrivateFrameworks/CMCapture.framework/N71m"
+for cam_model in N71 N71m; do
+  if [[ -f "$MNT_R16/System/Library/PrivateFrameworks/CMCapture.framework/$cam_model/AVCaptureSession.plist" ]]; then
+    "$VENV_PY" "$ROOT_DIR/scripts/patch_cmcapture_plist.py" \
+      "$MNT_R16/System/Library/PrivateFrameworks/CMCapture.framework/$cam_model/AVCaptureSession.plist"
+  fi
+done
+mkdir -p "$MNT_R16/usr/local/share/yigitzra1n"
+: > "$MNT_R16/usr/local/share/yigitzra1n/.cam_v1_ready"
+chown root:wheel "$MNT_R16/usr/local/share/yigitzra1n" "$MNT_R16/usr/local/share/yigitzra1n/.cam_v1_ready"
+chmod 644 "$MNT_R16/usr/local/share/yigitzra1n/.cam_v1_ready"
 copy_if_exists "$MNT_R15/Library/Audio/Tunings/N71" "$MNT_R16/Library/Audio/Tunings/N71"
 if [[ -d "$MNT_R16/Library/Audio/Tunings/N71" && ! -e "$MNT_R16/Library/Audio/Tunings/N71m" ]]; then
   ln -sfn "N71" "$MNT_R16/Library/Audio/Tunings/N71m"
@@ -325,11 +335,12 @@ if [[ -n "$IP8_APP" ]]; then
   hdiutil attach -readonly -noverify -noautoopen -mountpoint "$MNT_IP8_APP" "$TMP_WORK/dmgs/ip8_app.dmg" >/dev/null
 fi
 for app in MobilePhone.app FTMInternal-4.app Passbook.app Calculator.app Compass.app; do
-  if [[ -d "$MNT_IP8/Applications/$app" ]]; then
-    copy_if_exists "$MNT_IP8/Applications/$app" "$MNT_R16/Applications/$app"
-  elif [[ -d "$MNT_IP8_APP/Applications/$app" ]]; then
-    copy_if_exists "$MNT_IP8_APP/Applications/$app" "$MNT_R16/Applications/$app"
-  fi
+  for app_dir in "$MNT_IP8/Applications" "$MNT_IP8/var/staged_system_apps" "$MNT_IP8_APP/Applications"; do
+    if [[ -d "$app_dir/$app" ]]; then
+      copy_if_exists "$app_dir/$app" "$MNT_R16/Applications/$app"
+      break
+    fi
+  done
 done
 
 copy_if_exists "$MNT_IP8/System/Library/CoreServices/AegirProxyApp.app" "$MNT_R16/System/Library/CoreServices/AegirProxyApp.app"

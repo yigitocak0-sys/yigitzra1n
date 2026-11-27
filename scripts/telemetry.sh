@@ -31,7 +31,7 @@ if [[ -z "${YIGITZRA1N_TOOL_VERSION:-}" ]]; then
   if [[ -f "$_ver_file" ]]; then
     YIGITZRA1N_TOOL_VERSION="$(tr -d '[:space:]' < "$_ver_file")"
   else
-    YIGITZRA1N_TOOL_VERSION="1.24"
+    YIGITZRA1N_TOOL_VERSION="1.25"
   fi
 fi
 
@@ -56,7 +56,7 @@ telemetry_print_contact_note() {
 telemetry_effective_version() {
   local ver="$YIGITZRA1N_TOOL_VERSION"
   case "${YIGITZRA1N_DEVICE_SOC:-}" in
-    samsung_0x8000_forced) ver="${ver}+s8000" ;;
+    samsung_0x8000|samsung_0x8000_forced) ver="${ver}+s8000" ;;
     unexpected_forced) ver="${ver}+forced" ;;
   esac
   printf '%s' "$ver"

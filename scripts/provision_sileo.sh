@@ -137,6 +137,7 @@ if run_ssh '
   test -L /var/jb/Applications/Sileo.app &&
   test -x /var/jb/usr/bin/uicache &&
   test -f /private/var/jb/.yigitzra1n_sileo_ready &&
+  test -f /private/var/jb/.yigitzra1n_sileo_patched_v3 &&
   test -f /private/var/jb/.yigitzra1n_fw_ready &&
   test -f /private/var/jb/.yigitzra1n_repos_v2_ready &&
   test -S /var/run/yigitzra1n_gmr.sock &&
@@ -638,6 +639,7 @@ ${ln}"
     sleep 2
   done
   : > /private/var/jb/.yigitzra1n_sileo_ready
+  : > /private/var/jb/.yigitzra1n_sileo_patched_v3
   killall -9 Sileo >/dev/null 2>&1 || true
   if [ "$need_sbreload" -eq 1 ] && [ -x /var/jb/usr/bin/sbreload ]; then
     /var/jb/usr/bin/sbreload >/dev/null 2>&1 || true

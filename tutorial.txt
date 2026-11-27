@@ -162,7 +162,7 @@ No device connection is required for this step:
 - Automatically downloads the 3 official Apple IPSWs into `ipsw/` if not
   already placed there.
 - Compiles all custom binaries/dylibs and builds KernelCache v6, DeviceTree v5,
-  Restore/Maintenance RamDisks, and the Hybrid iOS 16.7.16 RootFS.
+  Restore/Maintenance RamDisks, and the yigitzra1n RootFS.
 - Prompts for your Mac `sudo` password during final RootFS assembly.
 
 --------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ No device connection is required for this step:
 
 4) The installer completes 3 stages:
    - STEP 1/3 (DFU #1): Captures your device's A9 SHC boot block from 15.8.8.
-   - STEP 2/3 (DFU #2): Restores the hybrid iOS 16.7.16 image to NAND.
+   - STEP 2/3 (DFU #2): Restores the yigitzra1n image to NAND.
    - STEP 3/3 (First Boot): Boots the device into iOS 16.7.16.
 
 --------------------------------------------------------------------------------

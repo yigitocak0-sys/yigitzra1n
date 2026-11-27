@@ -151,9 +151,18 @@ patch_remote_macho() {
   " < "$WORK_TMP/$backup_name.patched"
 }
 
-echo "[2/5] Patching Camera.app & Preferences.app with libn71m_avgestalt.dylib..."
+echo "[2/5] Patching Camera.app, Preferences.app & CMCapture AVCaptureSession.plist..."
 patch_remote_macho "/Applications/Camera.app/Camera" "Camera.orig" "/usr/lib/libn71m_avgestalt.dylib" "com.apple.camera"
 patch_remote_macho "/Applications/Preferences.app/Preferences" "Preferences.orig" "/usr/lib/libn71m_avgestalt.dylib" "com.apple.Preferences"
+
+python3 "$ROOT_DIR/scripts/apply_camera_fix.py" \
+  --host "$DEVICE_HOST" \
+  --port "$DEVICE_PORT" \
+  --password "$SSH_PASS" \
+  --wait-tries 5 \
+  --require-ssh \
+  --force \
+  --no-restart-media
 
 echo "[3/5] Patching tipsd, Tips.app & locationd..."
 patch_remote_macho "/usr/libexec/tipsd" "tipsd.orig" "/usr/lib/libn71m_tipsmodel.dylib" "com.apple.tipsd"
@@ -226,15 +235,23 @@ run_ssh '
   fi
 ' < "$WORK_TMP/launchd.plist.new"
 
-echo "[5/5] Restarting sn2400_charger_daemon, locationd & tipsd..."
+echo "[5/5] Restarting sn2400_charger_daemon, mediaserverd, locationd & tipsd..."
 sleep 1
 run_ssh '
   export PATH="/var/jb/usr/sbin:/var/jb/usr/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   killall sn2400_charger_daemon 2>/dev/null || true
   killall locationd 2>/dev/null || true
   killall tipsd 2>/dev/null || true
+  if [ -f /System/Library/LaunchDaemons/com.apple.mediaserverd.plist ] && command -v launchctl >/dev/null 2>&1; then
+    launchctl bootout user/501 /System/Library/LaunchDaemons/com.apple.mediaserverd.plist >/dev/null 2>&1 || true
+    sleep 0.5
+    launchctl bootstrap user/501 /System/Library/LaunchDaemons/com.apple.mediaserverd.plist >/dev/null 2>&1 || true
+    launchctl kickstart -kp user/501/com.apple.mediaserverd >/dev/null 2>&1 || true
+  else
+    killall mediaserverd 2>/dev/null || true
+  fi
   sleep 2
-  ps aux | grep -E "sn2400_charger_daemon|sshd|dropbear" | grep -v grep || true
+  ps aux | grep -E "sn2400_charger_daemon|mediaserverd|sshd|dropbear" | grep -v grep || true
 '
 echo "[+] Applying local activation & Setup.app bypass..."
 DEVICE_HOST="$DEVICE_HOST" DEVICE_PORT="$DEVICE_PORT" SSH_PASS="$SSH_PASS" \
